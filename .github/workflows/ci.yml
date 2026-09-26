@@ -1,0 +1,101 @@
+name: Overlay CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: sharepatch
+          POSTGRES_PASSWORD: sharepatch
+          POSTGRES_DB: sharepatch_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sharepatch -d sharepatch_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      NO_PROXY: 127.0.0.1,localhost,::1
+      no_proxy: 127.0.0.1,localhost,::1
+      SHAREPATCH_REPO: ${{ github.repository }}
+      SHAREPATCH_TEST_DATABASE_URL: postgres://sharepatch:sharepatch@127.0.0.1:5432/sharepatch_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Read pinned development baseline
+        id: baseline
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from pathlib import Path
+          baseline = json.loads(Path("UPSTREAM_BASELINE.json").read_text())
+          print(f"repo={baseline['repository']}")
+          print(f"tag={baseline['tag']}")
+          print(f"sha={baseline['commit']}")
+          PY
+
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ steps.baseline.outputs.repo }}
+          ref: ${{ steps.baseline.outputs.sha }}
+          path: upstream
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.1'
+          cache: true
+          cache-dependency-path: upstream/backend/go.sum
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: pnpm
+          cache-dependency-path: upstream/frontend/pnpm-lock.yaml
+
+      - name: Apply overlay and regenerate Wire
+        run: |
+          python3 scripts/apply-overlay.py \
+            --upstream upstream \
+            --upstream-sha "${{ steps.baseline.outputs.sha }}" \
+            --patch-repo "${{ github.repository }}"
+          cd upstream/backend/cmd/server
+          go run -mod=mod github.com/google/wire/cmd/wire
+
+      - name: Go unit tests
+        working-directory: upstream/backend
+        run: go test -tags=unit ./...
+
+      - name: PostgreSQL and container integration tests
+        working-directory: upstream/backend
+        run: go test -tags=integration ./...
+
+      - name: Install frontend dependencies
+        working-directory: upstream/frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Frontend typecheck, tests, and production build
+        working-directory: upstream/frontend
+        run: |
+          pnpm run typecheck
+          pnpm run test:run
+          pnpm run build
+
+      - name: Build server with embedded frontend
+        working-directory: upstream/backend
+        run: |
+          go build -tags embed -trimpath -o /tmp/sub2api-sharepatch ./cmd/server
