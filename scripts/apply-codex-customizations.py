@@ -76,6 +76,29 @@ def apply_codex_customizations(upstream: Path) -> None:
     frontend = upstream / "frontend/src"
     copy_tree(ROOT / "customizations/codex/frontend/src/sub2apiCodex", frontend / "sub2apiCodex")
 
+    ccswitch_import = frontend / "utils/ccswitchImport.ts"
+    codex_model_import = "from '@/sub2apiCodex/codexWebsocketConfig'"
+    if codex_model_import not in ccswitch_import.read_text():
+        patch_text(
+            ccswitch_import,
+            "import type { GroupPlatform } from '@/types'\n",
+            "import type { GroupPlatform } from '@/types'\n"
+            "import { CODEX_WEBSOCKET_DEFAULT_MODEL } from '@/sub2apiCodex/codexWebsocketConfig'\n",
+            "share the Codex template model default with CCS import",
+        )
+    patch_text(
+        ccswitch_import,
+        "export const OPENAI_CC_SWITCH_CODEX_MODEL = 'gpt-5.5'\n",
+        "// The CCS Codex deeplink carries one model ID; keep it aligned with the tutorial.\n"
+        "export const OPENAI_CC_SWITCH_CODEX_MODEL = CODEX_WEBSOCKET_DEFAULT_MODEL\n",
+        "use the tutorial default model for CCS Codex imports",
+    )
+    remove_text(
+        ccswitch_import,
+        "    ['configFormat', 'json'],\n",
+        "omit config format when the CCS link carries no config payload",
+    )
+
     use_key_modal = frontend / "components/keys/UseKeyModal.vue"
     codex_config_import = "from '@/sub2apiCodex/codexWebsocketConfig'"
     if codex_config_import not in use_key_modal.read_text():
@@ -458,6 +481,23 @@ def apply_codex_customizations(upstream: Path) -> None:
         "  // Codex customization: models resolve from the API endpoint.\n",
         "remove catalog-driven model selection tests",
         "Codex customization: models resolve from the API endpoint.",
+    )
+
+    ccswitch_tests = frontend / "utils/__tests__/ccswitchImport.spec.ts"
+    ccswitch_test_model_import = "from '@/sub2apiCodex/codexWebsocketConfig'"
+    if ccswitch_test_model_import not in ccswitch_tests.read_text():
+        patch_text(
+            ccswitch_tests,
+            "import type { GroupPlatform } from '@/types'\n",
+            "import type { GroupPlatform } from '@/types'\n"
+            "import { CODEX_WEBSOCKET_DEFAULT_MODEL } from '@/sub2apiCodex/codexWebsocketConfig'\n",
+            "test that CCS import tracks the Codex tutorial model",
+        )
+    patch_text(
+        ccswitch_tests,
+        "expect(OPENAI_CC_SWITCH_CODEX_MODEL).toBe('gpt-5.5')",
+        "expect(OPENAI_CC_SWITCH_CODEX_MODEL).toBe(CODEX_WEBSOCKET_DEFAULT_MODEL)",
+        "expect CCS import to use the shared Codex model default",
     )
 
 
