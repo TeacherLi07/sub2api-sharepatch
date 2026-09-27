@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cross-build supported update archives and checksums from a patched checkout."""
+"""Build the Linux/amd64 update archive and checksums from a patched checkout."""
 
 from __future__ import annotations
 
@@ -10,18 +10,12 @@ import os
 import subprocess
 import tarfile
 import tempfile
-import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 
-TARGETS = (
-    ("linux", "amd64"),
-    ("linux", "arm64"),
-    ("darwin", "amd64"),
-    ("darwin", "arm64"),
-    ("windows", "amd64"),
-)
+TARGET_OS = "linux"
+TARGET_ARCH = "amd64"
 
 
 def run(command: list[str], cwd: Path, env: dict[str, str]) -> None:
@@ -46,33 +40,26 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory(prefix="sharepatch-build-") as temporary:
         work = Path(temporary)
-        for goos, goarch in TARGETS:
-            filename = f"sub2api_{args.version}_{goos}_{goarch}"
-            binary_name = "sub2api.exe" if goos == "windows" else "sub2api"
-            binary_path = work / binary_name
-            env = os.environ.copy()
-            env.update({"CGO_ENABLED": "0", "GOOS": goos, "GOARCH": goarch})
-            ldflags = (
-                f"-s -w -X main.Version={args.version} -X main.Commit={args.upstream_sha} "
-                f"-X main.Date={build_date} -X main.BuildType=release"
-            )
-            run(
-                ["go", "build", "-p", "2", "-tags", "embed", "-trimpath", "-ldflags", ldflags, "-o", str(binary_path), "./cmd/server"],
-                backend,
-                env,
-            )
-            if goos == "linux" and goarch == "amd64":
-                version_output = subprocess.check_output([str(binary_path), "-version"], text=True)
-                if args.version not in version_output:
-                    raise SystemExit(f"built binary reported unexpected version: {version_output.strip()}")
-            archive = output / (filename + (".zip" if goos == "windows" else ".tar.gz"))
-            if goos == "windows":
-                with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
-                    bundle.write(binary_path, binary_name)
-            else:
-                with tarfile.open(archive, "w:gz") as bundle:
-                    bundle.add(binary_path, arcname=binary_name)
-            binary_path.unlink()
+        filename = f"sub2api_{args.version}_{TARGET_OS}_{TARGET_ARCH}"
+        binary_name = "sub2api"
+        binary_path = work / binary_name
+        env = os.environ.copy()
+        env.update({"CGO_ENABLED": "0", "GOOS": TARGET_OS, "GOARCH": TARGET_ARCH})
+        ldflags = (
+            f"-s -w -X main.Version={args.version} -X main.Commit={args.upstream_sha} "
+            f"-X main.Date={build_date} -X main.BuildType=release"
+        )
+        run(
+            ["go", "build", "-p", "2", "-tags", "embed", "-trimpath", "-ldflags", ldflags, "-o", str(binary_path), "./cmd/server"],
+            backend,
+            env,
+        )
+        version_output = subprocess.check_output([str(binary_path), "-version"], text=True)
+        if args.version not in version_output:
+            raise SystemExit(f"built binary reported unexpected version: {version_output.strip()}")
+        archive = output / (filename + ".tar.gz")
+        with tarfile.open(archive, "w:gz") as bundle:
+            bundle.add(binary_path, arcname=binary_name)
 
     metadata = {
         "release_version": args.version,
@@ -82,7 +69,7 @@ def main() -> None:
         "upstream_tag": args.upstream_tag,
         "upstream_commit": args.upstream_sha,
         "built_at": build_date,
-        "targets": [f"{goos}/{goarch}" for goos, goarch in TARGETS],
+        "targets": [f"{TARGET_OS}/{TARGET_ARCH}"],
     }
     metadata_path = output / "release-metadata.json"
     metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
