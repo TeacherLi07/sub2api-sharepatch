@@ -1,24 +1,38 @@
 # sub2api-sharepatch
 
-此仓库为 Sub2API 上游正式版维护一个独立叠加补丁。开发与 PR CI 基线固定为上游 `v0.2.8` / `fd80b08c90b55edcad5b00171b53f08721d30da1`；定时与手动发布工作流会读取上游最新正式 Release，并把补丁应用到该 Release 对应的 commit。
+此仓库为 Sub2API 上游正式版维护两层可独立应用的补丁。PR CI、定时和手动发布都会解析上游最新正式 Release 的 tag 与 commit SHA，并在一次运行中固定使用该 SHA 完成检出、补丁应用、测试和构建。
 
 共享账单保持 `standard` 计费模式。用户（管理员也包括在内）按周期实际扣除的 USD 用量占比分摊 CNY 总额；账单用于线下收款，不触发充值渠道或 CNY 余额扣款。网页更新指向本仓库的正式 Release，Docker 镜像发布到本仓库的 GHCR。
 
 ## 本地应用补丁
 
-将上游仓库检出到计划指定的 commit，再运行：
+本地可用解析器获取最新正式 Release 的 tag 和 commit SHA，再检出该提交：
 
 ```sh
-python3 scripts/apply-overlay.py \
-  --upstream ../sub2api-v0.2.8 \
-  --upstream-sha fd80b08c90b55edcad5b00171b53f08721d30da1 \
-  --patch-repo TeacherLi07/sub2api-sharepatch
+UPSTREAM_RELEASE_INFO="$(python3 scripts/resolve-upstream.py)"
+UPSTREAM_RELEASE_TAG="$(printf '%s\n' "$UPSTREAM_RELEASE_INFO" | awk -F= '$1 == "upstream_tag" {print $2}')"
+UPSTREAM_RELEASE_SHA="$(printf '%s\n' "$UPSTREAM_RELEASE_INFO" | awk -F= '$1 == "upstream_sha" {print $2}')"
+printf 'Using upstream release %s (%s)\n' "$UPSTREAM_RELEASE_TAG" "$UPSTREAM_RELEASE_SHA"
+git clone https://github.com/Wei-Shaw/sub2api.git ../sub2api-upstream
+git -C ../sub2api-upstream checkout --detach "$UPSTREAM_RELEASE_SHA"
 
-cd ../sub2api-v0.2.8/backend/cmd/server
+python3 scripts/apply-overlay.py \
+  --upstream ../sub2api-upstream \
+  --upstream-sha "$UPSTREAM_RELEASE_SHA" \
+  --patch-repo TeacherLi07/sub2api-sharepatch
+python3 scripts/apply-codex-customizations.py \
+  --upstream ../sub2api-upstream \
+  --upstream-sha "$UPSTREAM_RELEASE_SHA"
+
+cd ../sub2api-upstream/backend/cmd/server
 go run -mod=mod github.com/google/wire/cmd/wire
 ```
 
-脚本会拒绝 SHA 不符或缺失唯一锚点的源码。目标工作树应保持干净；`.work/` 是本地测试基线，不会提交到补丁仓库。
+两个脚本都会要求明确传入 SHA，并拒绝工作树 SHA 不匹配或缺失唯一锚点的源码。只需要共享账单功能时，只运行 `apply-overlay.py`；Codex 教程定制由第二个脚本独立应用。目标工作树应保持干净；`.work/` 是本地测试数据，不会提交到补丁仓库。
+
+### Codex 使用教程配置
+
+Codex 教程定制与共享账单 overlay 分开放置、分别应用。OpenAI 分组的“使用密钥”教程只显示“Codex CLI (WebSocket)”入口，并默认启用该配置。教程模板位于 [`customizations/codex/frontend/src/sub2apiCodex/codexWebsocketConfig.ts`](customizations/codex/frontend/src/sub2apiCodex/codexWebsocketConfig.ts)，模型默认值和配置文本可直接编辑；模板启用 `api_key_model_discovery = true`，Codex 会从 API 端点获取最新模型列表，前端不再提供本地模型目录下载。CI 与发布流程会依次应用两层补丁。
 
 ## 首次启用
 

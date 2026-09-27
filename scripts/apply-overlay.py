@@ -11,7 +11,6 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PINNED_BASELINE = "fd80b08c90b55edcad5b00171b53f08721d30da1"
 
 
 def fail(message: str) -> None:
@@ -801,7 +800,7 @@ def apply_frontend(upstream: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--upstream", required=True, type=Path)
-    parser.add_argument("--upstream-sha", default=PINNED_BASELINE)
+    parser.add_argument("--upstream-sha", required=True)
     parser.add_argument("--patch-repo", default=None)
     args = parser.parse_args()
     upstream = args.upstream.resolve()

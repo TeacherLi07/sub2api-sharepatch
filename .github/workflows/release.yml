@@ -126,12 +126,15 @@ jobs:
           cache: pnpm
           cache-dependency-path: upstream/frontend/pnpm-lock.yaml
 
-      - name: Apply overlay to the resolved upstream commit
+      - name: Apply sharepatch and Codex customization to the resolved upstream commit
         run: |
           python3 scripts/apply-overlay.py \
             --upstream upstream \
             --upstream-sha "$UPSTREAM_SHA" \
             --patch-repo "$GITHUB_REPOSITORY"
+          python3 scripts/apply-codex-customizations.py \
+            --upstream upstream \
+            --upstream-sha "$UPSTREAM_SHA"
           cd upstream/backend/cmd/server
           go run -mod=mod github.com/google/wire/cmd/wire
 

@@ -32,22 +32,17 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Read pinned development baseline
+      - name: Resolve latest upstream formal release
         id: baseline
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import json
-          from pathlib import Path
-          baseline = json.loads(Path("UPSTREAM_BASELINE.json").read_text())
-          print(f"repo={baseline['repository']}")
-          print(f"tag={baseline['tag']}")
-          print(f"sha={baseline['commit']}")
-          PY
+          python3 scripts/resolve-upstream.py --github-output "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v6
         with:
-          repository: ${{ steps.baseline.outputs.repo }}
-          ref: ${{ steps.baseline.outputs.sha }}
+          repository: Wei-Shaw/sub2api
+          ref: ${{ steps.baseline.outputs.upstream_sha }}
           path: upstream
 
       - uses: actions/setup-go@v6
@@ -66,12 +61,15 @@ jobs:
           cache: pnpm
           cache-dependency-path: upstream/frontend/pnpm-lock.yaml
 
-      - name: Apply overlay and regenerate Wire
+      - name: Apply sharepatch, Codex customization, and regenerate Wire
         run: |
           python3 scripts/apply-overlay.py \
             --upstream upstream \
-            --upstream-sha "${{ steps.baseline.outputs.sha }}" \
+            --upstream-sha "${{ steps.baseline.outputs.upstream_sha }}" \
             --patch-repo "${{ github.repository }}"
+          python3 scripts/apply-codex-customizations.py \
+            --upstream upstream \
+            --upstream-sha "${{ steps.baseline.outputs.upstream_sha }}"
           cd upstream/backend/cmd/server
           go run -mod=mod github.com/google/wire/cmd/wire
 
