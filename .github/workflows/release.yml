@@ -4,6 +4,15 @@ on:
   schedule:
     - cron: '23 4 * * 1'
   workflow_dispatch:
+    inputs:
+      publication:
+        description: Publication mode (manual runs default to an isolated pre-release)
+        required: true
+        type: choice
+        options:
+          - prerelease
+          - release
+        default: prerelease
 
 concurrency:
   group: sharepatch-release-${{ github.repository }}
@@ -19,7 +28,8 @@ jobs:
     outputs:
       tag: ${{ steps.upstream.outputs.upstream_tag }}
       sha: ${{ steps.upstream.outputs.upstream_sha }}
-      version: ${{ steps.upstream.outputs.release_version }}
+      version: ${{ steps.publication.outputs.version }}
+      prerelease: ${{ steps.publication.outputs.prerelease }}
       skip: ${{ steps.existing.outputs.skip }}
     steps:
       - uses: actions/checkout@v6
@@ -31,11 +41,28 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python3 scripts/resolve-upstream.py --github-output "$GITHUB_OUTPUT"
+      - name: Choose isolated pre-release version for manual builds
+        id: publication
+        env:
+          BASE_VERSION: ${{ steps.upstream.outputs.release_version }}
+          PRE_RELEASE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.publication == 'prerelease' }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import os
+          version = os.environ["BASE_VERSION"]
+          prerelease = os.environ["PRE_RELEASE"] == "true"
+          if prerelease:
+              version += f"-preview.{os.environ['RUN_ID']}.{os.environ['RUN_ATTEMPT']}"
+          print(f"version={version}")
+          print(f"prerelease={str(prerelease).lower()}")
+          PY
       - name: Skip an already published patch revision
         id: existing
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_VERSION: ${{ steps.upstream.outputs.release_version }}
+          RELEASE_VERSION: ${{ steps.publication.outputs.version }}
         run: |
           if gh release view "v${RELEASE_VERSION}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo 'skip=true' >> "$GITHUB_OUTPUT"
@@ -68,6 +95,7 @@ jobs:
       SHAREPATCH_REPO: ${{ github.repository }}
       SHAREPATCH_TEST_DATABASE_URL: postgres://sharepatch:sharepatch@127.0.0.1:5432/sharepatch_test?sslmode=disable
       SHAREPATCH_VERSION: v${{ needs.resolve.outputs.version }}
+      SHAREPATCH_PRERELEASE: ${{ needs.resolve.outputs.prerelease }}
       UPSTREAM_SHA: ${{ needs.resolve.outputs.sha }}
       UPSTREAM_TAG: ${{ needs.resolve.outputs.tag }}
     steps:
@@ -145,8 +173,17 @@ jobs:
       - name: Prepare lowercase GHCR name and build date
         id: image
         run: |
-          echo "name=ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+          image_name="ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          echo "name=$image_name" >> "$GITHUB_OUTPUT"
           echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          {
+            echo 'tags<<EOF'
+            echo "$image_name:$SHAREPATCH_VERSION"
+            if [ "$SHAREPATCH_PRERELEASE" != 'true' ]; then
+              echo "$image_name:latest"
+            fi
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
 
       - name: Build and publish amd64 and arm64 image
         uses: docker/build-push-action@v6
@@ -155,9 +192,7 @@ jobs:
           file: upstream/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ${{ steps.image.outputs.name }}:${{ env.SHAREPATCH_VERSION }}
-            ${{ steps.image.outputs.name }}:latest
+          tags: ${{ steps.image.outputs.tags }}
           build-args: |
             VERSION=${{ env.SHAREPATCH_VERSION }}
             COMMIT=${{ env.UPSTREAM_SHA }}
@@ -169,15 +204,21 @@ jobs:
       - name: Create release notes
         run: |
           cat > release-notes.md <<EOF
-          Shared-billing patch release for upstream ${UPSTREAM_TAG}.
+          Shared-billing patch build for upstream ${UPSTREAM_TAG}.
 
           - Upstream source commit: ${UPSTREAM_SHA}
           - Patch commit: ${GITHUB_SHA}
           - Docker image: ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]'):${SHAREPATCH_VERSION}
           - Compose users can update only the application image to the GHCR image above.
           EOF
+          if [ "$SHAREPATCH_PRERELEASE" = 'true' ]; then
+            cat >> release-notes.md <<EOF
 
-      - name: Publish official release and update release latest
+          This isolated pre-release is for build validation. It does not update the latest image tag or the latest release pointer.
+          EOF
+          fi
+
+      - name: Publish the selected release channel
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.resolve.outputs.version }}
@@ -186,7 +227,7 @@ jobs:
           body_path: release-notes.md
           files: release-assets/*
           draft: false
-          prerelease: false
-          make_latest: true
+          prerelease: ${{ needs.resolve.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.resolve.outputs.prerelease == 'true' && 'false' || 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -134,12 +134,32 @@ func TestPostgresLifecycleAndGuards(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `DELETE FROM usage_cleanup_tasks`); err != nil {
 		t.Fatal(err)
 	}
+	var frozenDeletedUser int64
+	if err := db.QueryRowContext(ctx, `
+		INSERT INTO users (email, status, deleted_at, frozen_balance)
+		VALUES ('deleted-frozen@example.test', 'disabled', clock_timestamp(), 1) RETURNING id
+	`).Scan(&frozenDeletedUser); err != nil {
+		t.Fatal(err)
+	}
+	frozenPreview, err := store.PreviewActivation(ctx, startsAt, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasBlocker(frozenPreview.Blockers, "frozen_balance") {
+		t.Fatalf("frozen balance on a soft-deleted user did not block activation: %#v", frozenPreview.Blockers)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE users SET frozen_balance = 0 WHERE id = $1`, frozenDeletedUser); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.ExecContext(ctx, `UPDATE users SET balance = balance + 1 WHERE id = $1`, disabledUser); err == nil {
 		t.Fatal("pending activation allowed a balance mutation")
 	}
 	preview, err := store.PreviewActivation(ctx, startsAt, 1)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if preview.Blockers == nil || len(preview.Blockers) != 0 {
+		t.Fatalf("clear activation preview blockers = %#v, want a non-nil empty list", preview.Blockers)
 	}
 	if len(preview.Users) != 3 || preview.Users[0].USDUsage != "0.12500001" {
 		t.Fatalf("unexpected backfill preview: %#v", preview.Users)
@@ -278,6 +298,98 @@ func TestPostgresLifecycleAndGuards(t *testing.T) {
 	if distributed != 5 {
 		t.Fatalf("distributed cents = %d, want 5", distributed)
 	}
+
+	// A registration holding a users write lock must land wholly before or
+	// after settlement's SHARE lock. If it commits first, it belongs to the
+	// closing roster and starts the next cycle at the fixed meter value.
+	registrationTx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registrationTx.Rollback()
+	var concurrentUser int64
+	if err := registrationTx.QueryRowContext(ctx, `
+		INSERT INTO users (email, status, balance)
+		VALUES ('concurrent-registration@example.test', 'active', 7) RETURNING id
+	`).Scan(&concurrentUser); err != nil {
+		t.Fatal(err)
+	}
+	registrationResult := make(chan settlementResult, 1)
+	go func() {
+		ledger, err := store.Settle(ctx, "cycle-three-registration")
+		registrationResult <- settlementResult{ledger: ledger, err: err}
+	}()
+	waitForUserShareLockWait(t, ctx, db)
+	if err := registrationTx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	registeredBill := <-registrationResult
+	if registeredBill.err != nil {
+		t.Fatalf("settlement after concurrent registration: %v", registeredBill.err)
+	}
+	if !hasUserLine(registeredBill.ledger.Lines, concurrentUser) {
+		t.Fatalf("user committed before the settlement boundary is missing from the bill: %#v", registeredBill.ledger.Lines)
+	}
+
+	// A deletion that commits while settlement waits must be excluded from the
+	// closing roster. It remains safe because the user has no current-cycle use.
+	deletionTx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer deletionTx.Rollback()
+	if _, err := deletionTx.ExecContext(ctx, `
+		UPDATE users SET deleted_at = clock_timestamp() WHERE id = $1
+	`, disabledUser); err != nil {
+		t.Fatal(err)
+	}
+	deletionResult := make(chan settlementResult, 1)
+	go func() {
+		ledger, err := store.Settle(ctx, "cycle-four-deletion")
+		deletionResult <- settlementResult{ledger: ledger, err: err}
+	}()
+	waitForUserShareLockWait(t, ctx, db)
+	if err := deletionTx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	deletedBill := <-deletionResult
+	if deletedBill.err != nil {
+		t.Fatalf("settlement after concurrent deletion: %v", deletedBill.err)
+	}
+	if hasUserLine(deletedBill.ledger.Lines, disabledUser) {
+		t.Fatalf("user deleted before the settlement boundary remains in the bill: %#v", deletedBill.ledger.Lines)
+	}
+}
+
+func waitForUserShareLockWait(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var waiting bool
+		if err := db.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM pg_locks
+				WHERE relation = to_regclass('users')
+				  AND mode = 'ShareLock' AND NOT granted
+			)
+		`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("settlement did not wait for the users SHARE lock")
+}
+
+func hasUserLine(lines []BillLine, userID int64) bool {
+	for _, line := range lines {
+		if line.UserID == userID {
+			return true
+		}
+	}
+	return false
 }
 
 func hasBlocker(blockers []Blocker, code string) bool {

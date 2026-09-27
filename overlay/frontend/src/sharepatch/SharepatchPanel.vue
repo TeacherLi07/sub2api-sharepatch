@@ -28,7 +28,7 @@
           </div>
           <div class="rounded-lg bg-gray-50 p-4 dark:bg-gray-700/50">
             <p class="text-xs text-gray-500 dark:text-gray-400">全体 USD 用量</p>
-            <p class="mt-1 font-mono text-gray-900 dark:text-white">${{ dashboard.current.total_usd }}</p>
+            <p class="mt-1 font-mono text-gray-900 dark:text-white">${{ formatTwoDecimals(dashboard.current.total_usd) }}</p>
           </div>
           <div class="rounded-lg bg-gray-50 p-4 dark:bg-gray-700/50">
             <p class="text-xs text-gray-500 dark:text-gray-400">本周期 CNY 总额</p>
@@ -57,8 +57,8 @@
             <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
               <tr v-for="line in dashboard.current.lines" :key="line.user_id">
                 <td class="px-4 py-3 text-gray-900 dark:text-white">{{ line.email }}</td>
-                <td class="px-4 py-3 text-right font-mono text-gray-700 dark:text-gray-200">${{ line.usd_usage }}</td>
-                <td class="px-4 py-3 text-right text-gray-700 dark:text-gray-200">{{ line.share_percent }}%</td>
+                <td class="px-4 py-3 text-right font-mono text-gray-700 dark:text-gray-200">${{ formatTwoDecimals(line.usd_usage) }}</td>
+                <td class="px-4 py-3 text-right text-gray-700 dark:text-gray-200">{{ formatTwoDecimals(line.share_percent) }}%</td>
                 <td class="px-4 py-3 text-right font-mono text-gray-900 dark:text-white">¥{{ line.amount_cny }}</td>
               </tr>
               <tr v-if="dashboard.current.lines.length === 0"><td colspan="4" class="px-4 py-5 text-center text-gray-500">当前没有参与成员</td></tr>
@@ -82,8 +82,8 @@
               <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
                 <tr v-for="line in period.lines" :key="line.user_id">
                   <td class="px-4 py-2 text-gray-800 dark:text-gray-100">{{ line.email }}</td>
-                  <td class="px-4 py-2 text-right font-mono">${{ line.usd_usage }}</td>
-                  <td class="px-4 py-2 text-right">{{ line.share_percent }}%</td>
+                  <td class="px-4 py-2 text-right font-mono">${{ formatTwoDecimals(line.usd_usage) }}</td>
+                  <td class="px-4 py-2 text-right">{{ formatTwoDecimals(line.share_percent) }}%</td>
                   <td class="px-4 py-2 text-right font-mono">¥{{ line.amount_cny }}</td>
                 </tr>
               </tbody>
@@ -112,7 +112,7 @@
           <div class="max-h-64 overflow-auto rounded-lg border border-gray-200 dark:border-gray-700">
             <table class="min-w-full text-sm">
               <thead class="sticky top-0 bg-gray-50 text-left text-xs text-gray-500 dark:bg-gray-700 dark:text-gray-300"><tr><th class="px-3 py-2">成员</th><th class="px-3 py-2 text-right">日志数</th><th class="px-3 py-2 text-right">回填 USD</th><th class="px-3 py-2 text-right">新余额</th></tr></thead>
-              <tbody class="divide-y divide-gray-100 dark:divide-gray-700"><tr v-for="user in activationPreview.users" :key="user.user_id"><td class="px-3 py-2">{{ user.email }}</td><td class="px-3 py-2 text-right">{{ user.usage_log_count }}</td><td class="px-3 py-2 text-right font-mono">${{ user.usd_usage }}</td><td class="px-3 py-2 text-right font-mono">${{ user.balance_after_activation }}</td></tr></tbody>
+              <tbody class="divide-y divide-gray-100 dark:divide-gray-700"><tr v-for="user in activationPreview.users" :key="user.user_id"><td class="px-3 py-2">{{ user.email }}</td><td class="px-3 py-2 text-right">{{ user.usage_log_count }}</td><td class="px-3 py-2 text-right font-mono">${{ formatTwoDecimals(user.usd_usage) }}</td><td class="px-3 py-2 text-right font-mono">${{ user.balance_after_activation }}</td></tr></tbody>
             </table>
           </div>
           <label class="flex items-start gap-2 text-sm text-gray-700 dark:text-gray-200">
@@ -127,9 +127,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onErrorCaptured, onMounted, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { sharepatchAPI, type SharepatchActivationPreview, type SharepatchDashboard } from './api'
+import { sharepatchLog } from './logging'
 
 const authStore = useAuthStore()
 const isAdmin = computed(() => authStore.isAdmin)
@@ -143,9 +144,34 @@ const startsAt = ref('')
 const initialAmountCNY = ref('0.00')
 const amountCNY = ref('0.00')
 const confirmIntegrity = ref(false)
+const settlementRetryStorageKey = 'sharepatch.pending-settlement-key'
+
+function loadPendingSettlementKey(): string | null {
+  try {
+    return sessionStorage.getItem(settlementRetryStorageKey)
+  } catch {
+    return null
+  }
+}
+
+function savePendingSettlementKey(key: string | null) {
+  try {
+    if (key) sessionStorage.setItem(settlementRetryStorageKey, key)
+    else sessionStorage.removeItem(settlementRetryStorageKey)
+  } catch {
+    // Keep the in-memory key for retries when browser storage is unavailable.
+  }
+}
+
+const pendingSettlementKey = ref<string | null>(loadPendingSettlementKey())
 
 function validCNY(value: string): boolean {
   return /^\d+(?:\.\d{1,2})?$/.test(value.trim())
+}
+
+function formatTwoDecimals(value: string | number | null | undefined): string {
+  const amount = Number(value)
+  return Number.isFinite(amount) ? amount.toFixed(2) : '0.00'
 }
 
 function formatDate(value: string): string {
@@ -158,13 +184,20 @@ function apiError(err: unknown): string {
   return '请求失败，请稍后重试。'
 }
 
+function reportFailure(operation: string, err: unknown) {
+  sharepatchLog.error(`${operation} failed`, err)
+}
+
 async function loadDashboard() {
   loading.value = true
   error.value = ''
+  sharepatchLog.debug('dashboard load started')
   try {
     dashboard.value = await sharepatchAPI.getDashboard()
     if (dashboard.value.current?.cycle) amountCNY.value = dashboard.value.current.cycle.amount_cny
+    sharepatchLog.info('dashboard loaded', { active: dashboard.value.active, history_count: dashboard.value.history.length })
   } catch (err) {
+    reportFailure('dashboard load', err)
     error.value = apiError(err)
   } finally {
     loading.value = false
@@ -175,12 +208,19 @@ async function previewActivation() {
   busy.value = true
   error.value = ''
   notice.value = ''
+  sharepatchLog.info('activation preview started')
   try {
     const localDate = new Date(startsAt.value)
     if (Number.isNaN(localDate.getTime())) throw new Error('请选择有效的周期开始时间。')
     activationPreview.value = await sharepatchAPI.previewActivation(localDate.toISOString(), initialAmountCNY.value.trim())
     confirmIntegrity.value = false
+    sharepatchLog.info('activation preview loaded', {
+      active: activationPreview.value.active,
+      user_count: activationPreview.value.users.length,
+      blocker_count: activationPreview.value.blockers.length,
+    })
   } catch (err) {
+    reportFailure('activation preview', err)
     error.value = apiError(err)
   } finally {
     busy.value = false
@@ -191,13 +231,16 @@ async function activate() {
   if (!confirmIntegrity.value) return
   busy.value = true
   error.value = ''
+  sharepatchLog.info('activation started')
   try {
     const localDate = new Date(startsAt.value)
     await sharepatchAPI.activate(localDate.toISOString(), initialAmountCNY.value.trim())
     notice.value = '共享计费已激活。'
+    sharepatchLog.info('activation completed')
     activationPreview.value = null
     await loadDashboard()
   } catch (err) {
+    reportFailure('activation', err)
     error.value = apiError(err)
   } finally {
     busy.value = false
@@ -208,11 +251,14 @@ async function saveAmount() {
   busy.value = true
   error.value = ''
   notice.value = ''
+  sharepatchLog.debug('cycle amount update started')
   try {
     await sharepatchAPI.setCurrentAmount(amountCNY.value.trim())
     notice.value = '本周期总额已更新。'
+    sharepatchLog.info('cycle amount updated')
     await loadDashboard()
   } catch (err) {
+    reportFailure('cycle amount update', err)
     error.value = apiError(err)
   } finally {
     busy.value = false
@@ -223,13 +269,20 @@ async function settle() {
   busy.value = true
   error.value = ''
   notice.value = ''
+  const key = pendingSettlementKey.value ?? (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`)
+  pendingSettlementKey.value = key
+  savePendingSettlementKey(key)
+  sharepatchLog.info('settlement started')
   try {
-    const key = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
-    await sharepatchAPI.settle(key)
-    notice.value = '本周期账单已固化，下一周期已经开启。'
+    const ledger = await sharepatchAPI.settle(key)
+    pendingSettlementKey.value = null
+    savePendingSettlementKey(null)
+    notice.value = `周期 #${ledger.cycle.id} 的账单已固化。`
+    sharepatchLog.info('settlement completed', { cycle_id: ledger.cycle.id, line_count: ledger.lines.length })
     await loadDashboard()
   } catch (err) {
-    error.value = apiError(err)
+    reportFailure('settlement', err)
+    error.value = `${apiError(err)} 再次尝试会复用同一结算请求，避免重复结算。`
   } finally {
     busy.value = false
   }
@@ -239,5 +292,26 @@ watch(() => dashboard.value?.current?.cycle?.amount_cny, (value) => {
   if (value) amountCNY.value = value
 })
 
-onMounted(loadDashboard)
+function onWindowError(event: ErrorEvent) {
+  sharepatchLog.error('window error', event.error, { line: event.lineno, column: event.colno })
+}
+
+function onUnhandledRejection(event: PromiseRejectionEvent) {
+  sharepatchLog.error('unhandled promise rejection', event.reason)
+}
+
+onErrorCaptured((err, _instance, source) => {
+  sharepatchLog.error('vue component error', err, { source })
+})
+
+onMounted(() => {
+  window.addEventListener('error', onWindowError)
+  window.addEventListener('unhandledrejection', onUnhandledRejection)
+  void loadDashboard()
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('error', onWindowError)
+  window.removeEventListener('unhandledrejection', onUnhandledRejection)
+})
 </script>

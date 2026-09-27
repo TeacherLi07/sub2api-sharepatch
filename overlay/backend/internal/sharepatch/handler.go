@@ -37,24 +37,29 @@ func NewHandler(db *sql.DB, runMode string) (*Handler, error) {
 	h.active.Store(active)
 	h.refreshed.Store(time.Now().UnixNano())
 	EnableUnifiedBillingRequirement()
+	sharepatchLogger.Info("handler ready", "active", active, "standard_billing", h.standardBilling)
 	return h, nil
 }
 
 func (h *Handler) Dashboard(c *gin.Context) {
 	dashboard, err := h.store.Dashboard(c.Request.Context())
 	if err != nil {
+		sharepatchLogger.Error("dashboard request failed", "error", safeSharepatchError(err))
 		response.Error(c, http.StatusInternalServerError, "failed to load shared billing dashboard")
 		return
 	}
+	sharepatchLogger.Debug("dashboard loaded", "active", dashboard.Active, "history_count", len(dashboard.History))
 	response.Success(c, dashboard)
 }
 
 func (h *Handler) AdminStatus(c *gin.Context) {
 	dashboard, err := h.store.Dashboard(c.Request.Context())
 	if err != nil {
+		sharepatchLogger.Error("admin dashboard request failed", "error", safeSharepatchError(err))
 		response.Error(c, http.StatusInternalServerError, "failed to load shared billing status")
 		return
 	}
+	sharepatchLogger.Debug("admin dashboard loaded", "active", dashboard.Active, "history_count", len(dashboard.History))
 	response.Success(c, dashboard)
 }
 
@@ -77,14 +82,21 @@ func (h *Handler) ActivationPreview(c *gin.Context) {
 	}
 	preview, err := h.store.PreviewActivation(c.Request.Context(), startsAt, amountCents)
 	if err != nil {
+		sharepatchLogger.Warn("activation preview failed", "error", safeSharepatchError(err))
 		response.BadRequest(c, err.Error())
 		return
 	}
+	codes := make([]string, 0, len(preview.Blockers))
+	for _, blocker := range preview.Blockers {
+		codes = append(codes, blocker.Code)
+	}
+	sharepatchLogger.Info("activation preview completed", "active", preview.Active, "user_count", len(preview.Users), "blocker_count", len(codes), "blocker_codes", codes)
 	response.Success(c, preview)
 }
 
 func (h *Handler) Activate(c *gin.Context) {
 	if !h.standardBilling {
+		sharepatchLogger.Warn("activation rejected outside standard billing mode")
 		response.Error(c, http.StatusConflict, "shared billing can only be activated in standard mode")
 		return
 	}
@@ -100,11 +112,13 @@ func (h *Handler) Activate(c *gin.Context) {
 	}
 	cycle, err := h.store.Activate(c.Request.Context(), startsAt, amountCents, req.ConfirmIntegrity)
 	if err != nil {
+		sharepatchLogger.Error("activation failed", "error", safeSharepatchError(err))
 		response.Error(c, http.StatusConflict, err.Error())
 		return
 	}
 	h.active.Store(true)
 	h.refreshed.Store(time.Now().UnixNano())
+	sharepatchLogger.Info("activation completed", "cycle_id", cycle.ID, "starts_at", cycle.StartsAt)
 	response.Success(c, cycle)
 }
 
@@ -114,6 +128,7 @@ type amountRequest struct {
 
 func (h *Handler) SetCurrentAmount(c *gin.Context) {
 	if !h.standardBilling {
+		sharepatchLogger.Warn("cycle amount update rejected outside standard billing mode")
 		response.Error(c, http.StatusConflict, "shared billing requires standard mode")
 		return
 	}
@@ -129,22 +144,27 @@ func (h *Handler) SetCurrentAmount(c *gin.Context) {
 	}
 	cycle, err := h.store.SetCurrentAmount(c.Request.Context(), cents)
 	if err != nil {
+		sharepatchLogger.Error("cycle amount update failed", "error", safeSharepatchError(err))
 		response.Error(c, http.StatusConflict, err.Error())
 		return
 	}
+	sharepatchLogger.Info("cycle amount updated", "cycle_id", cycle.ID)
 	response.Success(c, cycle)
 }
 
 func (h *Handler) Settle(c *gin.Context) {
 	if !h.standardBilling {
+		sharepatchLogger.Warn("settlement rejected outside standard billing mode")
 		response.Error(c, http.StatusConflict, "shared billing requires standard mode")
 		return
 	}
 	ledger, err := h.store.Settle(c.Request.Context(), c.GetHeader("Idempotency-Key"))
 	if err != nil {
+		sharepatchLogger.Error("settlement failed", "error", safeSharepatchError(err))
 		response.Error(c, http.StatusConflict, err.Error())
 		return
 	}
+	sharepatchLogger.Info("settlement completed", "cycle_id", ledger.Cycle.ID, "line_count", len(ledger.Lines))
 	response.Success(c, ledger)
 }
 
@@ -173,6 +193,7 @@ func (h *Handler) Gate() gin.HandlerFunc {
 			return
 		}
 		if !h.standardBilling {
+			sharepatchLogger.Warn("gateway request rejected outside standard billing mode", "path", c.Request.URL.Path)
 			response.Error(c, http.StatusServiceUnavailable, "gateway billing is paused because shared billing requires standard mode")
 			c.Abort()
 			return
@@ -184,10 +205,12 @@ func (h *Handler) Gate() gin.HandlerFunc {
 			return
 		}
 		if !active {
+			sharepatchLogger.Info("gateway request rejected while activation is pending", "path", c.Request.URL.Path)
 			response.Error(c, http.StatusServiceUnavailable, "gateway billing is paused until an administrator activates shared billing")
 			c.Abort()
 			return
 		}
+		sharepatchLogger.Debug("gateway request allowed", "path", c.Request.URL.Path)
 		c.Next()
 	}
 }

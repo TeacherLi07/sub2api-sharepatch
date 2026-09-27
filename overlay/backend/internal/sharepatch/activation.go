@@ -122,9 +122,12 @@ func (s *Store) Activate(ctx context.Context, startsAt time.Time, amountCents in
 	// Lock immediately after the state row. Billing touches usage_billing_dedup
 	// before users; balance triggers only read sharepatch_state, so this order
 	// cannot form a cycle with the billing transaction.
+	lockStarted := time.Now()
+	sharepatchLogger.Info("activation waiting for users table lock")
 	if _, err := tx.ExecContext(ctx, `LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE`); err != nil {
 		return nil, err
 	}
+	sharepatchLogger.Info("activation acquired users table lock", "wait_ms", time.Since(lockStarted).Milliseconds())
 	var cutoff time.Time
 	if err := tx.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&cutoff); err != nil {
 		return nil, err
@@ -223,7 +226,7 @@ func loadBackfillUsers(ctx context.Context, q queryer, startsAt, cutoff time.Tim
 }
 
 func checkActivationBlockers(ctx context.Context, q queryer, startsAt, cutoff time.Time, knownUserCount int64, includeDeletedUsage bool) ([]Blocker, error) {
-	var blockers []Blocker
+	blockers := make([]Blocker, 0, 5)
 	addCount := func(code, text, query string, args ...any) error {
 		var count int64
 		if err := q.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
@@ -238,7 +241,7 @@ func checkActivationBlockers(ctx context.Context, q queryer, startsAt, cutoff ti
 		blockers = append(blockers, Blocker{Code: "no_users", Text: "至少需要一个未删除用户。"})
 	}
 	if err := addCount("frozen_balance", "存在冻结余额；请先结清或解除冻结。", `
-		SELECT COUNT(*) FROM users WHERE deleted_at IS NULL AND COALESCE(frozen_balance, 0) <> 0
+		SELECT COUNT(*) FROM users WHERE COALESCE(frozen_balance, 0) <> 0
 	`); err != nil {
 		return nil, err
 	}

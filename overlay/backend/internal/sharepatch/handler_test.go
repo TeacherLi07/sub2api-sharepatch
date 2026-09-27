@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -45,6 +46,25 @@ func TestSimpleModeGateDoesNotAllowUnmeteredGatewayTraffic(t *testing.T) {
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/messages", nil))
 	if response.Code != http.StatusServiceUnavailable || called {
 		t.Fatalf("simple mode gateway status=%d called=%t, want 503 and no handler call", response.Code, called)
+	}
+}
+
+func TestPendingActivationPausesGatewayInStandardMode(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := &Handler{standardBilling: true}
+	handler.active.Store(false)
+	handler.refreshed.Store(time.Now().UnixNano())
+	called := false
+	router := gin.New()
+	router.Use(handler.Gate())
+	router.POST("/v1/messages", func(c *gin.Context) {
+		called = true
+		c.Status(http.StatusNoContent)
+	})
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/messages", nil))
+	if response.Code != http.StatusServiceUnavailable || called {
+		t.Fatalf("pending activation gateway status=%d called=%t, want 503 and no handler call", response.Code, called)
 	}
 }
 

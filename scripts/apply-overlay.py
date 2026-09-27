@@ -379,6 +379,7 @@ def apply_backend(upstream: Path, patch_repo: str) -> None:
         backend / "internal/sharepatch/decimal.go",
         backend / "internal/sharepatch/handler.go",
         backend / "internal/sharepatch/handler_test.go",
+        backend / "internal/sharepatch/logging.go",
         backend / "internal/sharepatch/mode.go",
         backend / "internal/sharepatch/postgres_integration_test.go",
         backend / "internal/sharepatch/settlement.go",
@@ -393,16 +394,166 @@ def apply_frontend(upstream: Path) -> None:
     frontend = upstream / "frontend/src"
     copy_tree(ROOT / "overlay/frontend/src/sharepatch", frontend / "sharepatch")
 
-    router = frontend / "router/index.ts"
+    app_header = frontend / "components/layout/AppHeader.vue"
+    header_summary = (
+        "        <div\n"
+        "          v-if=\"user && !authStore.isSimpleMode\"\n"
+        "          class=\"group relative hidden items-center gap-2 rounded-xl bg-primary-50 px-3 py-1.5 dark:bg-primary-900/20 sm:flex\"\n"
+        "        >\n"
+        "          <span class=\"text-xs text-primary-700 dark:text-primary-300\">当期消费</span>\n"
+        "          <span class=\"text-sm font-semibold text-primary-700 dark:text-primary-300\">{{ formatHeaderMoney(currentPeriodSpend) }}</span>\n"
+        "          <div class=\"pointer-events-none absolute right-0 top-full mt-2 hidden w-60 rounded-lg border border-gray-200 bg-white p-3 text-xs shadow-lg group-hover:block dark:border-dark-700 dark:bg-dark-800\">\n"
+        "            <div class=\"flex items-center justify-between\">\n"
+        "              <span class=\"text-gray-500 dark:text-dark-400\">当期消费</span>\n"
+        "              <span class=\"font-medium text-gray-900 dark:text-white\">{{ formatHeaderMoney(currentPeriodSpend) }}</span>\n"
+        "            </div>\n"
+        "            <div class=\"mt-2 flex items-center justify-between\">\n"
+        "              <span class=\"text-gray-500 dark:text-dark-400\">当期预计分摊</span>\n"
+        "              <span class=\"font-semibold text-gray-900 dark:text-white\">{{ formatHeaderCNY(expectedPeriodShare) }}</span>\n"
+        "            </div>\n"
+        "            <p v-if=\"!sharedBillingActive\" class=\"mt-2 border-t border-gray-100 pt-2 text-gray-500 dark:border-dark-700 dark:text-dark-400\">共享计费尚未激活</p>\n"
+        "          </div>\n"
+        "        </div>\n"
+    )
     patch_text(
-        router,
-        "  {\n    path: '/keys',\n",
+        app_header,
+        "        <!-- Balance Display -->\n",
+        "        <!-- Current period consumption -->\n" + header_summary + "        <!-- Balance Display -->\n",
+        "add current consumption to desktop header",
+    )
+    patch_text(
+        app_header,
+        "        <!-- Balance Display -->\n        <div\n          v-if=\"user\"\n",
+        "        <!-- Balance Display -->\n        <div\n          v-if=\"user && authStore.isSimpleMode\"\n",
+        "keep simple-mode balance display",
+    )
+    mobile_header_summary = (
+        "              <!-- Current consumption (mobile) -->\n"
+        "              <div v-if=\"!authStore.isSimpleMode\" class=\"border-b border-gray-100 px-4 py-2 dark:border-dark-700 sm:hidden\">\n"
+        "                <div class=\"flex items-center justify-between text-xs text-gray-500 dark:text-dark-400\">\n"
+        "                  <span>当期消费</span><span class=\"font-semibold text-primary-600 dark:text-primary-400\">{{ formatHeaderMoney(currentPeriodSpend) }}</span>\n"
+        "                </div>\n"
+        "                <div class=\"mt-1 flex items-center justify-between text-xs text-gray-500 dark:text-dark-400\">\n"
+        "                  <span>当期预计分摊</span><span class=\"font-semibold text-gray-800 dark:text-gray-100\">{{ formatHeaderCNY(expectedPeriodShare) }}</span>\n"
+        "                </div>\n"
+        "              </div>\n"
+        "              <!-- Balance (simple mode only) -->\n"
+        "              <div v-if=\"authStore.isSimpleMode\" class=\"border-b border-gray-100 px-4 py-2 dark:border-dark-700 sm:hidden\">\n"
+    )
+    patch_text(
+        app_header,
+        "              <!-- Balance (mobile only) -->\n              <div class=\"border-b border-gray-100 px-4 py-2 dark:border-dark-700 sm:hidden\">\n",
+        mobile_header_summary,
+        "add current consumption to mobile user menu",
+    )
+    patch_text(
+        app_header,
+        "import { resolveSiteBillingMode } from '@/utils/siteBillingMode'\n",
+        "import { resolveSiteBillingMode } from '@/utils/siteBillingMode'\n"
+        "import { sharepatchAPI, type SharepatchLine } from '@/sharepatch/api'\n"
+        "import { sharepatchLog } from '@/sharepatch/logging'\n",
+        "load shared billing summary in header",
+    )
+    patch_text(
+        app_header,
+        "const totalBalance = computed(() => availableBalance.value + frozenBalance.value)\n",
+        "const totalBalance = computed(() => availableBalance.value + frozenBalance.value)\n"
+        "const sharepatchLine = ref<SharepatchLine | null>(null)\n"
+        "const sharedBillingActive = ref(false)\n"
+        "const sharedBillingSummaryLoaded = ref(false)\n"
+        "const currentPeriodSpend = computed(() => Number(sharepatchLine.value?.usd_usage || 0))\n"
+        "const expectedPeriodShare = computed(() => Number(sharepatchLine.value?.amount_cny || 0))\n",
+        "header shared billing summary state",
+    )
+    patch_all(
+        app_header,
+        "{{ formatHeaderMoney(currentPeriodSpend) }}",
+        "{{ currentPeriodSpendDisplay }}",
+        "format current header consumption",
+    )
+    patch_all(
+        app_header,
+        "{{ formatHeaderCNY(expectedPeriodShare) }}",
+        "{{ expectedPeriodShareDisplay }}",
+        "format current header estimate",
+    )
+    patch_text(
+        app_header,
+        "const expectedPeriodShare = computed(() => Number(sharepatchLine.value?.amount_cny || 0))\n",
+        "const expectedPeriodShare = computed(() => Number(sharepatchLine.value?.amount_cny || 0))\n"
+        "const currentPeriodSpendDisplay = computed(() => sharedBillingSummaryLoaded.value ? formatHeaderMoney(currentPeriodSpend.value) : '—')\n"
+        "const expectedPeriodShareDisplay = computed(() => sharedBillingSummaryLoaded.value ? formatHeaderCNY(expectedPeriodShare.value) : '—')\n",
+        "format loaded header totals",
+    )
+    patch_text(
+        app_header,
+        "function toggleMobileSidebar() {\n",
+        "let sharedBillingRefreshTimer: number | undefined\n\n"
+        "async function loadSharedBillingSummary() {\n"
+        "  if (!user.value || authStore.isSimpleMode) {\n"
+        "    sharepatchLine.value = null\n"
+        "    sharedBillingSummaryLoaded.value = false\n"
+        "    return\n"
+        "  }\n"
+        "  try {\n"
+        "    const dashboard = await sharepatchAPI.getDashboard()\n"
+        "    sharedBillingActive.value = dashboard.active\n"
+        "    const userID = Number(user.value.id)\n"
+        "    sharepatchLine.value = dashboard.current?.lines?.find((line) => line.user_id === userID) ?? null\n"
+        "    sharedBillingSummaryLoaded.value = true\n"
+        "  } catch (error) {\n"
+        "    sharepatchLog.debug('header shared billing summary unavailable', { error_type: error instanceof Error ? error.name : typeof error })\n"
+        "  }\n"
+        "}\n\n"
+        "function formatHeaderCNY(value: number) {\n"
+        "  if (!Number.isFinite(value)) return '¥0.00'\n"
+        "  return `¥${value.toFixed(2)}`\n"
+        "}\n\n"
+        "function toggleMobileSidebar() {\n",
+        "header shared billing summary polling",
+    )
+    patch_text(
+        app_header,
+        "onMounted(() => {\n  document.addEventListener('click', handleClickOutside)\n})\n",
+        "onMounted(() => {\n"
+        "  document.addEventListener('click', handleClickOutside)\n"
+        "  void loadSharedBillingSummary()\n"
+        "  sharedBillingRefreshTimer = window.setInterval(() => void loadSharedBillingSummary(), 60_000)\n"
+        "})\n\n"
+        "watch([() => user.value?.id, () => authStore.isSimpleMode], () => {\n"
+        "  void loadSharedBillingSummary()\n"
+        "})\n",
+        "refresh header shared billing summary",
+    )
+    patch_text(
+        app_header,
+        "onBeforeUnmount(() => {\n  document.removeEventListener('click', handleClickOutside)\n})\n",
+        "onBeforeUnmount(() => {\n"
+        "  document.removeEventListener('click', handleClickOutside)\n"
+        "  if (sharedBillingRefreshTimer !== undefined) window.clearInterval(sharedBillingRefreshTimer)\n"
+        "})\n",
+        "clean up header summary refresh timer",
+    )
+    patch_text(
+        app_header,
+        "import { ref, computed, onMounted, onBeforeUnmount } from 'vue'\n",
+        "import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'\n",
+        "watch current header user",
+    )
+
+    router = frontend / "router/index.ts"
+    shared_billing_route = (
         "  {\n    path: '/shared-billing',\n"
         "    name: 'SharedBilling',\n"
         "    component: () => import('@/sharepatch/SharepatchView.vue'),\n"
         "    meta: { requiresAuth: true, requiresAdmin: false, title: 'Shared Billing' }\n"
         "  },\n"
+        "  {\n    path: '/keys',\n"
+    )
+    patch_text(
+        router,
         "  {\n    path: '/keys',\n",
+        shared_billing_route,
         "shared billing route",
     )
     patch_text(

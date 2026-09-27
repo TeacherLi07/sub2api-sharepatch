@@ -73,7 +73,11 @@ export const sharepatchAPI = {
       starts_at: startsAt,
       total_cny: totalCNY,
     })
-    return response.data
+    return {
+      ...response.data,
+      users: response.data.users ?? [],
+      blockers: response.data.blockers ?? [],
+    }
   },
   activate: async (startsAt: string, totalCNY: string) => {
     const response = await apiClient.post<SharepatchCycle>('/admin/sharepatch/activate', {

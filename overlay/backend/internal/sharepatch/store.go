@@ -41,6 +41,7 @@ func NewStore(ctx context.Context, db *sql.DB) (*Store, error) {
 }
 
 func (s *Store) Migrate(ctx context.Context) error {
+	sharepatchLogger.Debug("checking database migrations")
 	if _, err := s.db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS sharepatch_schema_migrations (
 			version TEXT PRIMARY KEY,
@@ -60,6 +61,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			continue
 		}
 		version := strings.TrimSuffix(entry.Name(), ".sql")
+		sharepatchLogger.Debug("checking database migration", "version", version)
 		sqlBytes, err := migrationFiles.ReadFile("migrations/" + entry.Name())
 		if err != nil {
 			return err
@@ -97,12 +99,16 @@ func (s *Store) Migrate(ctx context.Context) error {
 		}
 		if err != nil {
 			_ = tx.Rollback()
+			sharepatchLogger.Error("database migration failed", "version", version, "error", safeSharepatchError(err))
 			return fmt.Errorf("apply sharepatch migration %s: %w", version, err)
 		}
 		if err := tx.Commit(); err != nil {
+			sharepatchLogger.Error("database migration commit failed", "version", version, "error", safeSharepatchError(err))
 			return err
 		}
+		sharepatchLogger.Info("database migration ready", "version", version)
 	}
+	sharepatchLogger.Debug("database migrations ready")
 	return nil
 }
 

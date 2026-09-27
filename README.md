@@ -28,6 +28,10 @@ go run -mod=mod github.com/google/wire/cmd/wire
 
 首次迁移仅能基于现存余额计费日志回填。日志完整性、旧实例已停机、清理任务已暂停等条件必须由部署管理员结合真实数据库与备份核实；预览会列出数据库可识别的冻结余额、有效订阅、未结清批量图片任务、清理任务以及已删除用户日志等阻断项。
 
+## 诊断日志
+
+后端插件日志写入标准错误，使用 `SHAREPATCH_LOG_LEVEL=debug|info|warn|error` 设置等级，默认 `info`。前端日志默认 `info`，可在浏览器控制台运行 `localStorage.setItem('sharepatch.log_level', 'debug')` 后刷新页面启用详细记录；也支持 `info`、`warn`、`error` 和 `silent`。日志记录插件操作状态、预览阻断代码与异常类型，不记录账单成员明细或结算幂等键。
+
 ## Docker 更新
 
 使用现有 PostgreSQL、Redis、环境变量与数据卷配置，只把应用镜像改为：
