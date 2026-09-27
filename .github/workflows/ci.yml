@@ -27,7 +27,6 @@ jobs:
           --health-retries 20
     env:
       NO_PROXY: 127.0.0.1,localhost,::1
-      no_proxy: 127.0.0.1,localhost,::1
       SHAREPATCH_REPO: ${{ github.repository }}
       SHAREPATCH_TEST_DATABASE_URL: postgres://sharepatch:sharepatch@127.0.0.1:5432/sharepatch_test?sslmode=disable
     steps:
