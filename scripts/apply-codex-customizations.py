@@ -27,8 +27,10 @@ def run(*args: str, cwd: Path | None = None) -> str:
 
 def patch_text(path: Path, old: str, new: str, label: str) -> None:
     text = path.read_text()
-    if new in text:
-        return
+    if old not in text:
+        if new in text:
+            return
+        fail(f"{label}: anchor is missing in {path}")
     count = text.count(old)
     if count != 1:
         fail(f"{label}: expected one anchor in {path}, found {count}")
@@ -75,13 +77,15 @@ def apply_codex_customizations(upstream: Path) -> None:
     copy_tree(ROOT / "customizations/codex/frontend/src/sub2apiCodex", frontend / "sub2apiCodex")
 
     use_key_modal = frontend / "components/keys/UseKeyModal.vue"
-    patch_text(
-        use_key_modal,
-        "import type { GroupPlatform } from '@/types'\n",
-        "import type { GroupPlatform } from '@/types'\n"
-        "import { buildCodexWebsocketConfig, CODEX_WEBSOCKET_DEFAULT_MODEL } from '@/sub2apiCodex/codexWebsocketConfig'\n",
-        "load the editable Codex WebSocket tutorial template",
-    )
+    codex_config_import = "from '@/sub2apiCodex/codexWebsocketConfig'"
+    if codex_config_import not in use_key_modal.read_text():
+        patch_text(
+            use_key_modal,
+            "import type { GroupPlatform } from '@/types'\n",
+            "import type { GroupPlatform } from '@/types'\n"
+            "import { buildCodexWebsocketConfig, CODEX_WEBSOCKET_DEFAULT_MODEL } from '@/sub2apiCodex/codexWebsocketConfig'\n",
+            "load the editable Codex WebSocket tutorial template",
+        )
     patch_text(
         use_key_modal,
         "    case 'openai':\n      return 'codex'\n",
@@ -346,7 +350,7 @@ def apply_codex_customizations(upstream: Path) -> None:
         "    expect(configToml).toContain('[features]\\napi_key_model_discovery = true\\nresponses_websockets_v2 = true\\ngoals = true')\n",
         "expect live API model discovery in OpenAI Codex config",
     )
-    patch_text(
+    patch_all(
         use_key_modal_tests,
         "    expect(configToml).toContain('[features]\\nresponses_websockets_v2 = true\\ngoals = true')\n",
         "    expect(configToml).toContain('[features]\\napi_key_model_discovery = true\\nresponses_websockets_v2 = true\\ngoals = true')\n",

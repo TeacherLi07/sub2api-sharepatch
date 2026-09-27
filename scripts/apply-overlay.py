@@ -27,8 +27,10 @@ def run(*args: str, cwd: Path | None = None) -> str:
 
 def patch_text(path: Path, old: str, new: str, label: str) -> None:
     text = path.read_text()
-    if new in text:
-        return
+    if old not in text:
+        if new in text:
+            return
+        fail(f"{label}: anchor is missing in {path}")
     count = text.count(old)
     if count != 1:
         fail(f"{label}: expected one anchor in {path}, found {count}")
