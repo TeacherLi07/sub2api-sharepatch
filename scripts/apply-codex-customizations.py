@@ -37,6 +37,27 @@ def patch_text(path: Path, old: str, new: str, label: str) -> None:
     path.write_text(text.replace(old, new, 1))
 
 
+def patch_text_variants(
+    path: Path,
+    variants: list[tuple[str, str]],
+    label: str,
+    marker: str,
+) -> None:
+    text = path.read_text()
+    matches = [(old, new) for old, new in variants if old in text]
+    if not matches:
+        if marker in text:
+            return
+        fail(f"{label}: anchor is missing in {path}")
+    if len(matches) != 1:
+        fail(f"{label}: expected one supported anchor in {path}, found {len(matches)}")
+    old, new = matches[0]
+    count = text.count(old)
+    if count != 1:
+        fail(f"{label}: expected one anchor in {path}, found {count}")
+    path.write_text(text.replace(old, new, 1))
+
+
 def patch_all(path: Path, old: str, new: str, label: str) -> None:
     text = path.read_text()
     if old not in text:
@@ -213,6 +234,11 @@ def apply_codex_customizations(upstream: Path) -> None:
     remove_text(use_key_modal, "import { fetchCodexModelsManifest } from '@/api/codex'\n", "remove catalog fetch dependency")
     remove_text(
         use_key_modal,
+        "import { buildCodexModelCatalogUrl, fetchCodexModelsManifest } from '@/api/codex'\n",
+        "remove catalog URL and fetch dependencies",
+    )
+    remove_text(
+        use_key_modal,
         "import {\n"
         "  findCodexCatalogModel,\n"
         "  formatCodexReasoningEffortTomlLine,\n"
@@ -228,11 +254,27 @@ def apply_codex_customizations(upstream: Path) -> None:
         "  const model = 'grok-4.5'\n",
         "use the Grok Codex default without a local catalog",
     )
+    patch_text_variants(
+        use_key_modal,
+        [
+            (
+                'model = "${model}"\nmodel_catalog_json = "${escapeTomlBasicString(codexModelCatalogPath.value)}"\n# Optional:\n',
+                'model = "${model}"\n# Optional:\n',
+            ),
+            (
+                'model = "${model}"\n${codexLocalCatalogToml.value}# Optional:\n',
+                'model = "${model}"\n# Optional:\n',
+            ),
+        ],
+        "remove local catalog from Grok Codex configuration",
+        'model = "${model}"\n# Optional:',
+    )
     patch_text(
         use_key_modal,
-        'model = "${model}"\nmodel_catalog_json = "${escapeTomlBasicString(codexModelCatalogPath.value)}"\n# Optional:\n',
-        'model = "${model}"\n# Optional:\n',
-        "remove local catalog from Grok Codex configuration",
+        "${codexModelCatalogMode.value === 'remote' ? `model_catalog_url = \"${escapeTomlBasicString(buildCodexModelCatalogUrl(baseUrl))}\"\\n` : ''}# Prefer env_key (variable NAME). Do not combine with experimental_bearer_token.\n",
+        "# Codex discovers models directly from the configured API endpoint.\n"
+        "# Prefer env_key (variable NAME). Do not combine with experimental_bearer_token.\n",
+        "remove remote catalog URL from Grok Codex configuration",
     )
     patch_text(
         use_key_modal,
@@ -246,11 +288,27 @@ def apply_codex_customizations(upstream: Path) -> None:
         "  const model = preferredModel\n",
         "use routed Codex defaults without a local catalog",
     )
+    patch_text_variants(
+        use_key_modal,
+        [
+            (
+                'review_model = "${model}"\ndisable_response_storage = true\nmodel_catalog_json = "${escapeTomlBasicString(codexModelCatalogPath.value)}"\n',
+                'review_model = "${model}"\ndisable_response_storage = true\n',
+            ),
+            (
+                'review_model = "${model}"\ndisable_response_storage = true\n${codexLocalCatalogToml.value}\n[model_providers.sub2api]',
+                'review_model = "${model}"\ndisable_response_storage = true\n\n[model_providers.sub2api]',
+            ),
+        ],
+        "remove local catalog from routed Codex configuration",
+        'disable_response_storage = true\n\n[model_providers.sub2api]',
+    )
     patch_text(
         use_key_modal,
-        'review_model = "${model}"\ndisable_response_storage = true\nmodel_catalog_json = "${escapeTomlBasicString(codexModelCatalogPath.value)}"\n',
-        'review_model = "${model}"\ndisable_response_storage = true\n',
-        "remove local catalog from routed Codex configuration",
+        "${codexModelCatalogMode.value === 'remote' ? `model_catalog_url = \"${escapeTomlBasicString(buildCodexModelCatalogUrl(baseUrl))}\"\\n` : ''}env_key = \"SUB2API_API_KEY\"\n",
+        "# Codex discovers models directly from the configured API endpoint.\n"
+        "env_key = \"SUB2API_API_KEY\"\n",
+        "remove remote catalog URL from routed Codex configuration",
     )
     patch_text(
         use_key_modal,
@@ -261,13 +319,38 @@ def apply_codex_customizations(upstream: Path) -> None:
 
     zh_dashboard = frontend / "i18n/locales/zh/dashboard.ts"
     en_dashboard = frontend / "i18n/locales/en/dashboard.ts"
+    current_catalog_hints = [
+        (
+            zh_dashboard,
+            "codexConfigTomlHint: '下载下方模型目录，将两个文件保存到 Codex 配置目录后重启 Codex。',",
+            "codexConfigTomlHint: '将 config.toml 保存到 Codex 配置目录并重启；模型列表会从当前 API 端点获取。',",
+            "remove routed Codex catalog setup instructions",
+        ),
+        (
+            en_dashboard,
+            "codexConfigTomlHint: 'Download the model catalog below, save both files under the Codex config directory, and restart Codex.',",
+            "codexConfigTomlHint: 'Save config.toml under the Codex config directory and restart Codex. Available models are discovered from the API endpoint.',",
+            "remove routed Codex catalog setup instructions",
+        ),
+        (
+            zh_dashboard,
+            "configTomlHint: '保存 config.toml 后重启 Codex，客户端会加载远程目录。使用本地文件模式时，还需下载目录并保存到配置中的路径。',",
+            "configTomlHint: '将 config.toml 保存到 Codex 配置目录并重启；模型列表会从当前 API 端点获取。',",
+            "remove routed Codex catalog setup instructions",
+        ),
+        (
+            en_dashboard,
+            "configTomlHint: 'Save config.toml and restart Codex to load the remote catalog. In local file mode, also download the catalog to the configured path.',",
+            "configTomlHint: 'Save config.toml under the Codex config directory and restart Codex. Available models are discovered from the API endpoint.',",
+            "remove routed Codex catalog setup instructions",
+        ),
+    ]
+    for dashboard, old, new, label in current_catalog_hints:
+        if old in dashboard.read_text():
+            patch_all(dashboard, old, new, label)
+
     for dashboard, replacements in [
         (zh_dashboard, [
-            (
-                "codexConfigTomlHint: '下载下方模型目录，将两个文件保存到 Codex 配置目录后重启 Codex。',",
-                "codexConfigTomlHint: '将 config.toml 保存到 Codex 配置目录并重启；模型列表会从当前 API 端点获取。',",
-                "remove routed Codex catalog setup instructions",
-            ),
             (
                 "codexNote: '启动 Codex 前先导出 SUB2API_API_KEY。下载的目录只包含模型元数据，不包含 API Key。'",
                 "codexNote: '启动 Codex 前先导出 SUB2API_API_KEY；Codex 会从当前 API 端点发现可用模型。'",
@@ -300,11 +383,6 @@ def apply_codex_customizations(upstream: Path) -> None:
             ),
         ]),
         (en_dashboard, [
-            (
-                "codexConfigTomlHint: 'Download the model catalog below, save both files under the Codex config directory, and restart Codex.',",
-                "codexConfigTomlHint: 'Save config.toml under the Codex config directory and restart Codex. Available models are discovered from the API endpoint.',",
-                "remove routed Codex catalog setup instructions",
-            ),
             (
                 "codexNote: 'Export SUB2API_API_KEY before starting Codex. The downloaded catalog contains model metadata only, not your API key.',",
                 "codexNote: 'Export SUB2API_API_KEY before starting Codex. Codex discovers available models from the configured API endpoint.',",
@@ -403,6 +481,19 @@ def apply_codex_customizations(upstream: Path) -> None:
         "expect(configToml).toContain('model_auto_compact_token_limit = 900000')",
         "expect the configured Codex compaction threshold",
     )
+    openai_catalog_expectation = (
+        "    expect(configToml).toContain('model_catalog_url = \"https://example.com/v1/models\"')\n"
+        "    expect(configToml).not.toContain('model_catalog_json')\n"
+    )
+    if openai_catalog_expectation in use_key_modal_tests.read_text():
+        patch_all(
+            use_key_modal_tests,
+            openai_catalog_expectation,
+            "    expect(configToml).toContain('api_key_model_discovery = true')\n"
+            "    expect(configToml).not.toContain('model_catalog_url')\n"
+            "    expect(configToml).not.toContain('model_catalog_json')\n",
+            "expect endpoint discovery instead of remote catalogs in OpenAI Codex configs",
+        )
     patch_text(
         use_key_modal_tests,
         "import { afterEach, describe, expect, it, vi } from 'vitest'\n"
@@ -451,7 +542,7 @@ def apply_codex_customizations(upstream: Path) -> None:
     )
     patch_regex(
         use_key_modal_tests,
-        r"(?ms)^  // Scenario: API Key users can fetch a routed group catalog.*?(?=^  it\.each)",
+        r"(?ms)^  // Scenario: API Key users can .*?routed .*?catalog.*?(?=^  it\.each)",
         "  // Codex customization: models are discovered by the API endpoint instead of downloaded.\n\n",
         "remove downloaded catalog test",
         "Codex customization: models are discovered by the API endpoint instead of downloaded.",
@@ -462,18 +553,32 @@ def apply_codex_customizations(upstream: Path) -> None:
         "    'configures API model discovery for the %s routed group',",
         "rename routed Codex catalog test",
     )
-    patch_text(
+    patch_all(
         use_key_modal_tests,
         "      expect(wrapper.find('[data-testid=\"codex-model-catalog\"]').exists()).toBe(true)\n",
         "      expect(wrapper.find('[data-testid=\"codex-model-catalog\"]').exists()).toBe(false)\n",
         "expect the catalog panel to be absent",
     )
-    patch_text(
+    patch_text_variants(
         use_key_modal_tests,
-        "      expect(config).toContain('model_catalog_json = \"~/.codex/codex-models.json\"')\n",
-        "      expect(config).toContain('api_key_model_discovery = true')\n"
-        "      expect(config).not.toContain('model_catalog_json')\n",
+        [
+            (
+                "      expect(config).toContain('model_catalog_json = \"~/.codex/codex-models.json\"')\n",
+                "      expect(config).toContain('api_key_model_discovery = true')\n"
+                "      expect(config).not.toContain('model_catalog_url')\n"
+                "      expect(config).not.toContain('model_catalog_json')\n",
+            ),
+            (
+                "      expect(config).toContain('model_catalog_url = \"https://example.com/v1/models\"')\n"
+                "      expect(config).not.toContain('model_catalog_json')\n",
+                "      expect(config).toContain('api_key_model_discovery = true')\n"
+                "      expect(config).not.toContain('model_catalog_url')\n"
+                "      expect(config).not.toContain('model_catalog_json')\n",
+            ),
+        ],
         "expect endpoint discovery instead of local catalog in routed Codex config",
+        "expect(config).not.toContain('model_catalog_url')\n"
+        "      expect(config).not.toContain('model_catalog_json')",
     )
     patch_regex(
         use_key_modal_tests,
