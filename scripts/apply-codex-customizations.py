@@ -563,21 +563,22 @@ def apply_codex_customizations(upstream: Path) -> None:
         use_key_modal_tests,
         [
             (
-                "      expect(config).toContain('model_catalog_json = \"~/.codex/codex-models.json\"')\n",
-                "      expect(config).toContain('api_key_model_discovery = true')\n"
+                "\n      expect(config).toContain('model_catalog_json = \"~/.codex/codex-models.json\"')\n",
+                "\n      expect(config).toContain('api_key_model_discovery = true')\n"
                 "      expect(config).not.toContain('model_catalog_url')\n"
                 "      expect(config).not.toContain('model_catalog_json')\n",
             ),
             (
-                "      expect(config).toContain('model_catalog_url = \"https://example.com/v1/models\"')\n"
+                "\n      expect(config).toContain('model_catalog_url = \"https://example.com/v1/models\"')\n"
                 "      expect(config).not.toContain('model_catalog_json')\n",
-                "      expect(config).toContain('api_key_model_discovery = true')\n"
+                "\n      expect(config).toContain('api_key_model_discovery = true')\n"
                 "      expect(config).not.toContain('model_catalog_url')\n"
                 "      expect(config).not.toContain('model_catalog_json')\n",
             ),
         ],
         "expect endpoint discovery instead of local catalog in routed Codex config",
-        "expect(config).not.toContain('model_catalog_url')\n"
+        "\n      expect(config).toContain('api_key_model_discovery = true')\n"
+        "      expect(config).not.toContain('model_catalog_url')\n"
         "      expect(config).not.toContain('model_catalog_json')",
     )
     patch_regex(
