@@ -35,22 +35,27 @@ describe('shared billing estimates', () => {
     vi.mocked(sharepatchAPI.getDashboard).mockResolvedValue(dashboard())
     wrapper = mount(SharepatchPanel, { attachTo: document.body })
     await flushPromises()
-    expect(wrapper.text()).toContain('预估总均摊（元）')
-    expect(wrapper.text()).toContain('预估已消费（元）')
+    const headers = wrapper.get('thead tr').findAll('th')
+    expect(headers.map(header => header.text())).toEqual([
+      '成员', 'USD 用量', '用量占比', '预估已消费（元）', '预估总均摊（元）',
+    ])
     const cells = wrapper.findAll('tbody tr')[0]!.findAll('td')
-    expect(cells[3]!.text()).toBe('¥300.00')
-    expect(cells[4]!.text()).toBe('¥10.71')
+    expect(cells[3]!.text()).toBe('¥10.71')
+    expect(cells[4]!.text()).toBe('¥300.00')
     expect(wrapper.text()).toContain('自然月预计结束')
     expect(wrapper.text()).toContain('数据时间')
-    const hints = wrapper.findAllComponents(HelpTooltip)
-    for (const hint of hints) {
+    const consumedHint = headers[3]!.getComponent(HelpTooltip)
+    const totalHint = headers[4]!.getComponent(HelpTooltip)
+    for (const hint of [consumedHint, totalHint]) {
       await hint.trigger('mouseenter')
       const visible = [...document.body.querySelectorAll<HTMLElement>('[role="tooltip"]')].filter(el => el.style.display !== 'none')
       expect(visible).toHaveLength(1)
       expect(visible[0]!.textContent).toContain('个人用量 ÷ 全体用量')
+      expect(visible[0]!.textContent).toContain(hint === consumedHint ? '仅供费用参考。' : '周期初期较高')
       await hint.trigger('mouseleave')
     }
-    expect(hints[1]!.props('content')).toContain('并非单笔对话的固定价格')
+    expect(consumedHint.props('content')).toContain('（周期已过时长 ÷ 自然月周期时长）')
+    expect(totalHint.props('content')).toContain('个人用量 ÷ 全体用量 × 周期总额')
   })
 
   it('shows placeholders for both zero-usage estimates and retains historical amounts', async () => {

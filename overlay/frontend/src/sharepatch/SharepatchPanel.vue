@@ -4,7 +4,7 @@
       <div>
         <h2 class="text-lg font-semibold text-gray-900 dark:text-white">共同账单</h2>
         <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-          按本周期实际扣除的 USD 用量占比分摊管理员设置的 CNY 总额。账单供线下收款。
+          按本周期实际扣除的 USD 用量占比分摊管理员设置的 CNY 总额。
         </p>
       </div>
       <button class="btn btn-secondary" :disabled="loading" @click="loadDashboard">刷新</button>
@@ -58,10 +58,10 @@
                 <th class="px-4 py-3 text-right">USD 用量</th>
                 <th class="px-4 py-3 text-right">用量占比</th>
                 <th class="whitespace-nowrap px-4 py-3 text-right">
-                  预估总均摊（元）<HelpTooltip content="个人用量 ÷ 全体用量 × 周期总额。表示按当前用量占比分摊整月总额的预计负担；占比变化时金额也会变化，最终以实际结算为准。分位尾数按结算规则分配。全体用量为零时无法计算，显示 —。" />
+                  预估已消费（元）<HelpTooltip width-class="w-80" content="（个人用量 ÷ 全体用量 ）×（周期已过时长 ÷ 自然月周期时长）× 周期总额。假设总额随时间均匀发生，按当前用量占比分摊截至数据时间的折算总额，仅供费用参考。" />
                 </th>
                 <th class="whitespace-nowrap px-4 py-3 text-right">
-                  预估已消费（元）<HelpTooltip width-class="w-80" content="个人用量 ÷ 全体用量 ×（周期已过时长 ÷ 自然月周期时长）× 周期总额。假设总额随时间均匀发生，按当前用量占比分摊截至数据时间的折算总额，仅供费用参考；会随全体用量变化，并非单笔对话的固定价格。按账单时区计算至下月同日同刻；无同日取月末，时间比例限制在 0–100%。全体用量为零时无法计算，显示 —。金额四舍五入到分；到达预计结束后与预估总均摊完全一致。" />
+                  预估总均摊（元）<HelpTooltip content="个人用量 ÷ 全体用量 × 周期总额。表示按当前用量占比分摊整月总额的预计负担；周期初期较高" />
                 </th>
               </tr>
             </thead>
@@ -70,8 +70,8 @@
                 <td class="px-4 py-3 text-gray-900 dark:text-white">{{ line.email }}</td>
                 <td class="px-4 py-3 text-right font-mono text-gray-700 dark:text-gray-200">${{ formatTwoDecimals(line.usd_usage) }}</td>
                 <td class="px-4 py-3 text-right text-gray-700 dark:text-gray-200">{{ formatTwoDecimals(line.share_percent) }}%</td>
-                <td class="px-4 py-3 text-right font-mono text-gray-900 dark:text-white">{{ line.amount_cny === null ? '—' : `¥${line.amount_cny}` }}</td>
                 <td class="px-4 py-3 text-right font-mono text-gray-900 dark:text-white">{{ line.prorated_amount_cny === null ? '—' : `¥${line.prorated_amount_cny}` }}</td>
+                <td class="px-4 py-3 text-right font-mono text-gray-900 dark:text-white">{{ line.amount_cny === null ? '—' : `¥${line.amount_cny}` }}</td>
               </tr>
               <tr v-if="dashboard.current.lines.length === 0"><td colspan="5" class="px-4 py-5 text-center text-gray-500">当前没有参与成员</td></tr>
             </tbody>
