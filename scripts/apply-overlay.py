@@ -158,8 +158,8 @@ def apply_backend(upstream: Path, patch_repo: str) -> None:
     router_file = backend / "internal/server/router.go"
     patch_text(
         router_file,
-        "\troutes.RegisterPaymentRoutes(v1, h.Payment, h.PaymentWebhook, h.Admin.Payment, jwtAuth, adminAuth, auditLog, settingService, panelRateLimiter)\n",
-        "\troutes.RegisterPaymentRoutes(v1, h.Payment, h.PaymentWebhook, h.Admin.Payment, jwtAuth, adminAuth, auditLog, settingService, panelRateLimiter)\n"
+        "\troutes.RegisterPaymentRoutes(v1, h.Payment, h.PaymentWebhook, h.Admin.Payment, jwtAuth, adminAuth, auditLog, settingService, panelRateLimiter, redisClient)\n",
+        "\troutes.RegisterPaymentRoutes(v1, h.Payment, h.PaymentWebhook, h.Admin.Payment, jwtAuth, adminAuth, auditLog, settingService, panelRateLimiter, redisClient)\n"
         "\troutes.RegisterSharepatchRoutes(v1, h.Sharepatch, jwtAuth, adminAuth, auditLog)\n",
         "shared billing API route registration",
     )
@@ -812,6 +812,38 @@ def apply_frontend(upstream: Path) -> None:
         "expect(componentSource).toContain('const flagSubscription = () => false')",
         "update subscription navigation regression expectation",
     )
+
+    # v0.2.12 adds typesafe quotas but leaves this upstream test on five platforms.
+    quota_test = frontend / "api/__tests__/settings.authSourceDefaults.spec.ts"
+    patch_text(
+        quota_test,
+        "/** 全 null 的 5 平台 map，用于断言归一化默认值 */",
+        "/** 全 null 的 6 平台 map，用于断言归一化默认值 */",
+        "update the upstream quota fixture description",
+    )
+    patch_text(
+        quota_test,
+        "  grok: { daily: null, weekly: null, monthly: null },\n}",
+        "  grok: { daily: null, weekly: null, monthly: null },\n"
+        "  typesafe: { daily: null, weekly: null, monthly: null },\n}",
+        "include typesafe in the upstream default quota fixture",
+    )
+    patch_text(
+        quota_test,
+        '  it("无参数时返回全 5 平台全 null", () => {',
+        '  it("无参数时返回全 6 平台全 null", () => {',
+        "update the upstream quota normalization test description",
+    )
+    for helper in ("normalizePlatformQuotasMap", "sanitizePlatformQuotasMap"):
+        argument = "" if helper == "normalizePlatformQuotasMap" else "{}"
+        patch_text(
+            quota_test,
+            f"    const result = {helper}({argument});\n"
+            "    expect(Object.keys(result)).toHaveLength(5);\n",
+            f"    const result = {helper}({argument});\n"
+            "    expect(Object.keys(result).sort()).toEqual(Object.keys(allNullQuotas).sort());\n",
+            f"check all six platform names in {helper}",
+        )
 
 
 def main() -> None:
