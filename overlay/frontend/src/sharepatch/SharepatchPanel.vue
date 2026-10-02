@@ -25,6 +25,7 @@
           <div class="rounded-lg bg-gray-50 p-4 dark:bg-gray-700/50">
             <p class="text-xs text-gray-500 dark:text-gray-400">当前周期</p>
             <p class="mt-1 font-medium text-gray-900 dark:text-white">{{ formatDate(dashboard.current.cycle.starts_at) }} 起</p>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">自然月预计结束：{{ formatDate(dashboard.current.estimated_ends_at) }}</p>
           </div>
           <div class="rounded-lg bg-gray-50 p-4 dark:bg-gray-700/50">
             <p class="text-xs text-gray-500 dark:text-gray-400">全体 USD 用量</p>
@@ -52,19 +53,31 @@
         <div class="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
           <table class="min-w-full divide-y divide-gray-200 text-sm dark:divide-gray-700">
             <thead class="bg-gray-50 text-left text-xs uppercase text-gray-500 dark:bg-gray-700/60 dark:text-gray-300">
-              <tr><th class="px-4 py-3">成员</th><th class="px-4 py-3 text-right">USD 用量</th><th class="px-4 py-3 text-right">用量占比</th><th class="px-4 py-3 text-right">预计 CNY</th></tr>
+              <tr>
+                <th class="px-4 py-3">成员</th>
+                <th class="px-4 py-3 text-right">USD 用量</th>
+                <th class="px-4 py-3 text-right">用量占比</th>
+                <th class="whitespace-nowrap px-4 py-3 text-right">
+                  预估总均摊（元）<HelpTooltip content="个人用量 ÷ 全体用量 × 周期总额。表示按当前用量占比分摊整月总额的预计负担；占比变化时金额也会变化，最终以实际结算为准。分位尾数按结算规则分配。全体用量为零时无法计算，显示 —。" />
+                </th>
+                <th class="whitespace-nowrap px-4 py-3 text-right">
+                  预估已消费（元）<HelpTooltip width-class="w-80" content="个人用量 ÷ 全体用量 ×（周期已过时长 ÷ 自然月周期时长）× 周期总额。假设总额随时间均匀发生，按当前用量占比分摊截至数据时间的折算总额，仅供费用参考；会随全体用量变化，并非单笔对话的固定价格。按账单时区计算至下月同日同刻；无同日取月末，时间比例限制在 0–100%。全体用量为零时无法计算，显示 —。金额四舍五入到分；到达预计结束后与预估总均摊完全一致。" />
+                </th>
+              </tr>
             </thead>
             <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
               <tr v-for="line in dashboard.current.lines" :key="line.user_id">
                 <td class="px-4 py-3 text-gray-900 dark:text-white">{{ line.email }}</td>
                 <td class="px-4 py-3 text-right font-mono text-gray-700 dark:text-gray-200">${{ formatTwoDecimals(line.usd_usage) }}</td>
                 <td class="px-4 py-3 text-right text-gray-700 dark:text-gray-200">{{ formatTwoDecimals(line.share_percent) }}%</td>
-                <td class="px-4 py-3 text-right font-mono text-gray-900 dark:text-white">¥{{ line.amount_cny }}</td>
+                <td class="px-4 py-3 text-right font-mono text-gray-900 dark:text-white">{{ line.amount_cny === null ? '—' : `¥${line.amount_cny}` }}</td>
+                <td class="px-4 py-3 text-right font-mono text-gray-900 dark:text-white">{{ line.prorated_amount_cny === null ? '—' : `¥${line.prorated_amount_cny}` }}</td>
               </tr>
-              <tr v-if="dashboard.current.lines.length === 0"><td colspan="4" class="px-4 py-5 text-center text-gray-500">当前没有参与成员</td></tr>
+              <tr v-if="dashboard.current.lines.length === 0"><td colspan="5" class="px-4 py-5 text-center text-gray-500">当前没有参与成员</td></tr>
             </tbody>
           </table>
         </div>
+        <p class="text-xs text-gray-500 dark:text-gray-400">数据时间：{{ formatDate(dashboard.current.as_of) }}（{{ dashboard.timezone }}）。刷新后更新用量与时间折算；实际结算时间由管理员决定。</p>
       </template>
 
       <div v-if="dashboard.history.length" class="space-y-3">
@@ -129,6 +142,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onErrorCaptured, onMounted, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
+import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import { sharepatchAPI, type SharepatchActivationPreview, type SharepatchDashboard } from './api'
 import { sharepatchLog } from './logging'
 

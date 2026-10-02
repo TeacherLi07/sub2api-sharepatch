@@ -466,7 +466,7 @@ def apply_frontend(upstream: Path) -> None:
         app_header,
         "import { resolveSiteBillingMode } from '@/utils/siteBillingMode'\n",
         "import { resolveSiteBillingMode } from '@/utils/siteBillingMode'\n"
-        "import { sharepatchAPI, type SharepatchLine } from '@/sharepatch/api'\n"
+        "import { sharepatchAPI, type SharepatchCurrentLine } from '@/sharepatch/api'\n"
         "import { sharepatchLog } from '@/sharepatch/logging'\n",
         "load shared billing summary in header",
     )
@@ -474,11 +474,11 @@ def apply_frontend(upstream: Path) -> None:
         app_header,
         "const totalBalance = computed(() => availableBalance.value + frozenBalance.value)\n",
         "const totalBalance = computed(() => availableBalance.value + frozenBalance.value)\n"
-        "const sharepatchLine = ref<SharepatchLine | null>(null)\n"
+        "const sharepatchLine = ref<SharepatchCurrentLine | null>(null)\n"
         "const sharedBillingActive = ref(false)\n"
         "const sharedBillingSummaryLoaded = ref(false)\n"
         "const currentPeriodSpend = computed(() => Number(sharepatchLine.value?.usd_usage || 0))\n"
-        "const expectedPeriodShare = computed(() => Number(sharepatchLine.value?.amount_cny || 0))\n",
+        "const expectedPeriodShare = computed(() => sharepatchLine.value?.amount_cny ?? null)\n",
         "header shared billing summary state",
     )
     patch_all(
@@ -495,10 +495,10 @@ def apply_frontend(upstream: Path) -> None:
     )
     patch_text(
         app_header,
-        "const expectedPeriodShare = computed(() => Number(sharepatchLine.value?.amount_cny || 0))\n",
-        "const expectedPeriodShare = computed(() => Number(sharepatchLine.value?.amount_cny || 0))\n"
+        "const expectedPeriodShare = computed(() => sharepatchLine.value?.amount_cny ?? null)\n",
+        "const expectedPeriodShare = computed(() => sharepatchLine.value?.amount_cny ?? null)\n"
         "const currentPeriodSpendDisplay = computed(() => sharedBillingSummaryLoaded.value ? formatHeaderMoney(currentPeriodSpend.value) : '—')\n"
-        "const expectedPeriodShareDisplay = computed(() => sharedBillingSummaryLoaded.value ? formatHeaderCNY(expectedPeriodShare.value) : '—')\n",
+        "const expectedPeriodShareDisplay = computed(() => sharedBillingSummaryLoaded.value && expectedPeriodShare.value !== null ? `¥${expectedPeriodShare.value}` : '—')\n",
         "format loaded header totals",
     )
     patch_text(
@@ -520,10 +520,6 @@ def apply_frontend(upstream: Path) -> None:
         "  } catch (error) {\n"
         "    sharepatchLog.debug('header shared billing summary unavailable', { error_type: error instanceof Error ? error.name : typeof error })\n"
         "  }\n"
-        "}\n\n"
-        "function formatHeaderCNY(value: number) {\n"
-        "  if (!Number.isFinite(value)) return '¥0.00'\n"
-        "  return `¥${value.toFixed(2)}`\n"
         "}\n\n"
         "function toggleMobileSidebar() {\n",
         "header shared billing summary polling",

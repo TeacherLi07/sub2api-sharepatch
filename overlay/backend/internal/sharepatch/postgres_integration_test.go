@@ -281,6 +281,14 @@ func TestPostgresLifecycleAndGuards(t *testing.T) {
 	if len(dashboard.History) == 0 || dashboard.History[0].Lines[0].Email != "first@example.test" {
 		t.Fatalf("historical bill did not preserve the email snapshot: %#v", dashboard.History)
 	}
+	if dashboard.Current == nil || dashboard.Current.AsOf.IsZero() || dashboard.Current.EstimatedEndsAt.IsZero() {
+		t.Fatalf("current estimate timing is missing: %#v", dashboard.Current)
+	}
+	for _, line := range dashboard.Current.Lines {
+		if line.AmountCNY != nil || line.ProratedAmountCNY != nil {
+			t.Fatalf("zero-usage current amounts must be null: %#v", line)
+		}
+	}
 	if _, err := store.SetCurrentAmount(ctx, 5); err != nil {
 		t.Fatal(err)
 	}

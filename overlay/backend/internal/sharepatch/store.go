@@ -131,9 +131,17 @@ type BillLine struct {
 }
 
 type CurrentPreview struct {
-	Cycle    *Cycle     `json:"cycle,omitempty"`
-	TotalUSD string     `json:"total_usd"`
-	Lines    []BillLine `json:"lines"`
+	Cycle           *Cycle            `json:"cycle,omitempty"`
+	TotalUSD        string            `json:"total_usd"`
+	AsOf            time.Time         `json:"as_of"`
+	EstimatedEndsAt time.Time         `json:"estimated_ends_at"`
+	Lines           []CurrentBillLine `json:"lines"`
+}
+
+type CurrentBillLine struct {
+	BillLine
+	AmountCNY         *string `json:"amount_cny"`
+	ProratedAmountCNY *string `json:"prorated_amount_cny"`
 }
 
 type PeriodLedger struct {
@@ -239,7 +247,7 @@ func usageUnits(user userBalance) (*big.Int, error) {
 	return usage, nil
 }
 
-func (s *Store) currentPreview(ctx context.Context, q queryer, cycleID int64) (*CurrentPreview, error) {
+func (s *Store) currentPreview(ctx context.Context, q queryer, cycleID int64, timezone string) (*CurrentPreview, error) {
 	cycle, err := s.cycle(ctx, q, cycleID)
 	if err != nil {
 		return nil, err
@@ -270,22 +278,35 @@ func (s *Store) currentPreview(ctx context.Context, q queryer, cycleID int64) (*
 	for _, row := range allocations {
 		allocationByID[row.UserID] = row
 	}
-	preview := &CurrentPreview{Cycle: cycle, TotalUSD: unitsDecimal(total), Lines: make([]BillLine, 0, len(users))}
+	location, err := time.LoadLocation(timezone)
+	if err != nil {
+		return nil, fmt.Errorf("load billing timezone: %w", err)
+	}
+	var asOf time.Time
+	if err := q.QueryRowContext(ctx, `SELECT transaction_timestamp()`).Scan(&asOf); err != nil {
+		return nil, err
+	}
+	end := expectedMonthEnd(cycle.StartsAt, location)
+	elapsed := elapsedInMonth(cycle.StartsAt, end, asOf)
+	preview := &CurrentPreview{
+		Cycle: cycle, TotalUSD: unitsDecimal(total), AsOf: asOf.UTC(), EstimatedEndsAt: end,
+		Lines: make([]CurrentBillLine, 0, len(users)),
+	}
 	for _, user := range users {
 		row := allocationByID[user.ID]
+		amountCNY, proratedAmountCNY := currentCNYEstimates(row, total, cents, elapsed, end.Sub(cycle.StartsAt))
 		sharePercent := row.SharePercent
 		if sharePercent == "" {
 			sharePercent = "0.00000000"
 		}
-		preview.Lines = append(preview.Lines, BillLine{
+		preview.Lines = append(preview.Lines, CurrentBillLine{BillLine: BillLine{
 			UserID:       user.ID,
 			Email:        user.Email,
 			Status:       user.Status,
 			CreatedAt:    user.CreatedAt.UTC().Format(time.RFC3339Nano),
 			USDUsage:     unitsDecimal(usageByID[user.ID]),
 			SharePercent: sharePercent,
-			AmountCNY:    formatCNY(row.Cents),
-		})
+		}, AmountCNY: amountCNY, ProratedAmountCNY: proratedAmountCNY})
 	}
 	return preview, nil
 }
@@ -302,7 +323,7 @@ func (s *Store) Dashboard(ctx context.Context) (*Dashboard, error) {
 	}
 	dashboard := &Dashboard{Active: active, Timezone: timezone, History: []PeriodLedger{}}
 	if active && cycleID > 0 {
-		dashboard.Current, err = s.currentPreview(ctx, tx, cycleID)
+		dashboard.Current, err = s.currentPreview(ctx, tx, cycleID, timezone)
 		if err != nil {
 			return nil, err
 		}

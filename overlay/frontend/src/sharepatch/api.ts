@@ -18,10 +18,17 @@ export interface SharepatchLine {
   amount_cny: string
 }
 
+export interface SharepatchCurrentLine extends Omit<SharepatchLine, 'amount_cny'> {
+  amount_cny: string | null
+  prorated_amount_cny: string | null
+}
+
 export interface SharepatchPreview {
   cycle?: SharepatchCycle
   total_usd: string
-  lines: SharepatchLine[]
+  as_of: string
+  estimated_ends_at: string
+  lines: SharepatchCurrentLine[]
 }
 
 export interface SharepatchPeriod {
