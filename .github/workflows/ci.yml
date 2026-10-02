@@ -92,7 +92,31 @@ jobs:
           pnpm run test:run
           pnpm run build
 
-      - name: Build server with embedded frontend
-        working-directory: upstream/backend
+      - name: Build and validate the release archive and runtime Docker context
+        env:
+          UPSTREAM_SHA: ${{ steps.baseline.outputs.upstream_sha }}
+          UPSTREAM_TAG: ${{ steps.baseline.outputs.upstream_tag }}
+          SHAREPATCH_VERSION: v${{ steps.baseline.outputs.release_version }}
         run: |
-          go build -tags embed -trimpath -o /tmp/sub2api-sharepatch ./cmd/server
+          python3 scripts/build-release-assets.py \
+            --upstream upstream --version "$SHAREPATCH_VERSION" \
+            --upstream-tag "$UPSTREAM_TAG" --upstream-sha "$UPSTREAM_SHA" \
+            --patch-repo "$GITHUB_REPOSITORY" --output release-assets \
+            --docker-context release-image
+
+      - uses: docker/setup-buildx-action@v3
+      - name: Package the verified binary as a Linux/amd64 image
+        uses: docker/build-push-action@v6
+        with:
+          context: release-image
+          file: release-image/Dockerfile
+          platforms: linux/amd64
+          load: true
+          provenance: false
+          tags: sharepatch-ci:${{ github.run_id }}
+      - name: Check the actual image runtime and update permissions
+        env:
+          CI_IMAGE: sharepatch-ci:${{ github.run_id }}
+          UPSTREAM_SHA: ${{ steps.baseline.outputs.upstream_sha }}
+          SHAREPATCH_VERSION: v${{ steps.baseline.outputs.release_version }}
+        run: bash scripts/verify-release-image.sh "$CI_IMAGE" release-image "$SHAREPATCH_VERSION" "$UPSTREAM_SHA"

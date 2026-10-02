@@ -347,6 +347,21 @@ def apply_backend(upstream: Path, patch_repo: str) -> None:
         "CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -p=2 \\\n",
         "bound Docker Go build parallelism",
     )
+    patch_text(
+        dockerfile,
+        "# Create data directory\n"
+        "RUN mkdir -p /app/data && chown sub2api:sub2api /app/data\n",
+        "# The updater creates temporary files and atomically replaces the binary in /app.\n"
+        "# Both the application directory and data directory must be writable by sub2api.\n"
+        "RUN mkdir -p /app/data && chown sub2api:sub2api /app /app/data\n",
+        "allow the runtime user to update the container binary",
+    )
+    patch_text(
+        upstream / "Dockerfile.goreleaser",
+        'LABEL org.opencontainers.image.source="https://github.com/Wei-Shaw/sub2api"',
+        f'LABEL org.opencontainers.image.source="https://github.com/{patch_repo}"',
+        "release container source label",
+    )
     image = f"ghcr.io/{patch_repo.lower()}:latest"
     for compose_name in ("docker-compose.yml", "docker-compose.local.yml", "docker-compose.standalone.yml"):
         compose = upstream / "deploy" / compose_name

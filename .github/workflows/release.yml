@@ -58,18 +58,14 @@ jobs:
           print(f"version={version}")
           print(f"prerelease={str(prerelease).lower()}")
           PY
-      - name: Skip an already published patch revision
+      - name: Inspect release provenance and completeness before deciding to skip
         id: existing
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_VERSION: ${{ steps.publication.outputs.version }}
-        run: |
-          if gh release view "v${RELEASE_VERSION}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo 'skip=true' >> "$GITHUB_OUTPUT"
-            echo "v${RELEASE_VERSION} is already published"
-          else
-            echo 'skip=false' >> "$GITHUB_OUTPUT"
-          fi
+          SHAREPATCH_VERSION: v${{ steps.publication.outputs.version }}
+          SHAREPATCH_PRERELEASE: ${{ steps.publication.outputs.prerelease }}
+          UPSTREAM_SHA: ${{ steps.upstream.outputs.upstream_sha }}
+        run: python3 scripts/publish-release.py preflight
 
   build-test-publish:
     needs: resolve
@@ -162,45 +158,56 @@ jobs:
             --upstream-tag "$UPSTREAM_TAG" \
             --upstream-sha "$UPSTREAM_SHA" \
             --patch-repo "$GITHUB_REPOSITORY" \
-            --output release-assets
+            --output release-assets \
+            --docker-context release-image
 
       - uses: docker/setup-buildx-action@v3
+
+      - name: Prepare isolated image candidate and release tag
+        id: image
+        run: |
+          image_name="ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          echo "name=$image_name" >> "$GITHUB_OUTPUT"
+          echo "candidate=$image_name:build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+          echo "versioned=$image_name:$SHAREPATCH_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Package the verified release binary using the upstream runtime Dockerfile
+        uses: docker/build-push-action@v6
+        with:
+          context: release-image
+          file: release-image/Dockerfile
+          platforms: linux/amd64
+          load: true
+          provenance: false
+          tags: ${{ steps.image.outputs.candidate }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ env.SHAREPATCH_VERSION }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            io.sub2api.sharepatch.upstream-revision=${{ env.UPSTREAM_SHA }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Check image binary, runtime user, updater permissions, resources, and backup tools
+        env:
+          CANDIDATE_IMAGE: ${{ steps.image.outputs.candidate }}
+        run: bash scripts/verify-release-image.sh "$CANDIDATE_IMAGE" release-image "$SHAREPATCH_VERSION" "$UPSTREAM_SHA"
+
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Prepare lowercase GHCR name and build date
-        id: image
+      - name: Push the checked candidate and bind its immutable digest to the release
+        id: pushed
+        env:
+          CANDIDATE_IMAGE: ${{ steps.image.outputs.candidate }}
         run: |
-          image_name="ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
-          echo "name=$image_name" >> "$GITHUB_OUTPUT"
-          echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
-          {
-            echo 'tags<<EOF'
-            echo "$image_name:$SHAREPATCH_VERSION"
-            if [ "$SHAREPATCH_PRERELEASE" != 'true' ]; then
-              echo "$image_name:latest"
-            fi
-            echo 'EOF'
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Build and publish linux/amd64 image
-        uses: docker/build-push-action@v6
-        with:
-          context: upstream
-          file: upstream/Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.image.outputs.tags }}
-          build-args: |
-            VERSION=${{ env.SHAREPATCH_VERSION }}
-            COMMIT=${{ env.UPSTREAM_SHA }}
-            DATE=${{ steps.image.outputs.date }}
-            GOLANG_IMAGE=golang:1.27.1-alpine
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          docker push "$CANDIDATE_IMAGE"
+          image_ref=$(docker image inspect "$CANDIDATE_IMAGE" --format '{{index .RepoDigests 0}}')
+          python3 scripts/publish-release.py bind-image --image "$image_ref"
+          echo "image_ref=$image_ref" >> "$GITHUB_OUTPUT"
 
       - name: Create release notes
         run: |
@@ -219,16 +226,59 @@ jobs:
           EOF
           fi
 
-      - name: Publish the selected release channel
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ needs.resolve.outputs.version }}
-          target_commitish: ${{ github.sha }}
-          name: v${{ needs.resolve.outputs.version }}
-          body_path: release-notes.md
-          files: release-assets/*
-          draft: false
-          prerelease: ${{ needs.resolve.outputs.prerelease == 'true' }}
-          make_latest: ${{ needs.resolve.outputs.prerelease == 'true' && 'false' || 'true' }}
+      - name: Upload and verify all assets in a resumable draft release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/publish-release.py stage
+
+      - name: Tag the verified image with its release version
+        env:
+          VERSIONED_IMAGE: ${{ steps.image.outputs.versioned }}
+          VERIFIED_IMAGE_REF: ${{ steps.pushed.outputs.image_ref }}
+        run: docker buildx imagetools create --prefer-index=false --tag "$VERSIONED_IMAGE" "$VERIFIED_IMAGE_REF"
+
+      - name: Publish the complete release without changing latest pointers
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/publish-release.py publish
+
+  promote:
+    needs: [resolve, build-test-publish]
+    if: >-
+      always() && needs.resolve.result == 'success' &&
+      needs.resolve.outputs.prerelease == 'false' &&
+      (needs.build-test-publish.result == 'success' ||
+       (needs.build-test-publish.result == 'skipped' && needs.resolve.outputs.skip == 'true'))
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      SHAREPATCH_VERSION: v${{ needs.resolve.outputs.version }}
+      SHAREPATCH_PRERELEASE: 'false'
+      UPSTREAM_SHA: ${{ needs.resolve.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Recheck published artifacts and prevent promotion of an older version
+        id: release
+        run: python3 scripts/publish-release.py inspect
+      - uses: docker/setup-buildx-action@v3
+        if: steps.release.outputs.promote == 'true'
+      - uses: docker/login-action@v3
+        if: steps.release.outputs.promote == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Promote the recorded digest to the version tag and latest
+        if: steps.release.outputs.promote == 'true'
+        env:
+          VERIFIED_IMAGE_REF: ${{ steps.release.outputs.image_ref }}
+        run: |
+          image_name=${VERIFIED_IMAGE_REF%@*}
+          docker buildx imagetools create --prefer-index=false \
+            --tag "$image_name:$SHAREPATCH_VERSION" --tag "$image_name:latest" "$VERIFIED_IMAGE_REF"
+      - name: Advance the webpage update channel after image promotion succeeds
+        if: steps.release.outputs.promote == 'true'
+        run: python3 scripts/publish-release.py activate

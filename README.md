@@ -54,11 +54,43 @@ Codex 教程定制与共享账单 overlay 分开放置、分别应用。OpenAI �
 image: ghcr.io/teacherli07/sub2api-sharepatch:latest
 ```
 
-然后执行 `docker compose pull sub2api && docker compose up -d sub2api`。发布工作流在所有测试和目标构建成功后才推送多架构 `latest` 标签。
+然后执行 `docker compose pull sub2api && docker compose up -d sub2api`。发布工作流在所有测试、镜像运行检查和 Release 附件校验成功后才推进 Linux/amd64 的 `latest` 标签。指定版本时，将镜像标签换成目标 Release 的完整 tag，例如 `v0.2.11-share.3`。
+
+### 网页更新与目录权限
+
+网页更新会在容器内的程序目录 `/app` 创建 `.sub2api-update-*` 临时目录，下载并校验目标平台的 Release 更新包，再通过重命名备份、替换 `/app/sub2api`。服务以 `sub2api` 用户运行，因此 `/app` 目录需要归该用户所有；仅给二进制文件设置属主不足以创建临时目录或重命名文件。源码构建补丁为 `/app` 和 `/app/data` 设置 `sub2api:sub2api` 属主；发布镜像采用上游 `Dockerfile.goreleaser`，沿用其 `/app` 权限配置。
+
+`v0.2.8-share.3` 和 `v0.2.11-share.3` 的已发布镜像缺少 `/app` 目录的属主设置。如果网页更新返回 500 `internal error`，在宿主机的 Compose 部署目录查看后端日志：
+
+```sh
+docker compose logs --since 10m --tail 300 sub2api
+```
+
+若日志包含 `failed to create temp dir: mkdir /app/.sub2api-update-...: permission denied`，可修复现有容器：
+
+```sh
+docker compose exec -u 0 sub2api chown sub2api:sub2api /app
+```
+
+修正权限后可直接重试网页更新，更新成功后按页面提示重启服务。这里的 `/app` 是容器内目录；该命令只调整目录自身的属主。
+
+网页更新后的二进制和上述权限修正保存在当前容器的可写层，容器重建后会恢复到 Compose 指定的镜像内容。Docker 部署建议通过拉取、重建目标版本的应用镜像完成持久更新；网页更新后也应同步 Compose 中的镜像标签，以便后续重建使用目标版本。
+
+## 发布产物与重试
+
+发布范围固定为 `linux/amd64`。Release tag 和镜像版本标签保持 `v<上游版本>-share.<补丁修订>`；更新包文件名使用不带 `v` 的版本号，例如 `sub2api_0.2.11-share.4_linux_amd64.tar.gz`。旧版网页更新按平台匹配附件，仍可识别新文件名；历史 Release 附件保持原样。
+
+前端和后端在工作流中各构建一次。`scripts/build-release-assets.py` 校验版本与上游 SHA，生成更新包、元数据和 SHA256 清单，再从已校验的更新包提取二进制生成最小 Docker 构建目录。镜像使用上游 `Dockerfile.goreleaser` 打包这份程序，并包含入口脚本、定价资源与 PostgreSQL 备份工具。发布前通过实际容器检查程序版本、二进制和定价文件哈希、运行用户、更新目录创建与文件重命名权限，以及 `pg_dump`、`psql` 可执行性。
+
+镜像检查通过后先推送独立的 `build-<run_id>-<attempt>` 候选标签，把镜像 digest 写入 `release-metadata.json` 并重算校验清单。随后创建或恢复草稿 Release，上传完整附件并重新校验，生成版本镜像标签，再发布 Release。正式发布最后按元数据中记录的 digest 推进镜像 `latest`，成功后才推进网页更新的 latest Release。预发布使用独立的 `-preview.<run_id>.<attempt>` 版本，不推进 latest。
+
+重试只有在已发布 Release 的附件、校验值、源码提交和镜像 digest 记录完整时才跳过构建；跳过构建后仍会执行正式版本的 latest 推进，恢复上次失败的推进步骤。草稿和不完整的可修改 Release 会重新构建并补齐附件。遇到源码提交冲突、API 权限或网络错误会明确失败；不完整的不可变 Release 需要增加 `PATCH_REVISION` 发布新版本。完整 Release 的附件不会被重写，较旧版本不会覆盖较新的 latest。
+
+GitHub 与 GHCR 的 latest 更新无法跨服务原子提交，因此两步之间仍可能有短暂差异；两个更新渠道均只指向已经完成校验的产物，失败后可重跑工作流恢复。
 
 ## 验证
 
-发布工作流会对上游源码应用补丁，生成 Wire 代码，运行 Go 单元测试、PostgreSQL 集成测试、前端类型检查与 Vitest，构建前端、Linux/amd64 二进制和 `linux/amd64` 容器镜像。当前发布产物面向 Ubuntu/Linux x64。发布版本格式为 `v<上游版本>-share.<PATCH_REVISION>`；`release-metadata.json` 记录上游 tag、commit 与补丁 commit。
+CI 与发布工作流会对上游源码应用补丁，生成 Wire 代码，运行 Go 单元测试、PostgreSQL 集成测试、前端类型检查与 Vitest，构建前端、Linux/amd64 更新包和容器镜像，并检查实际镜像的运行权限与资源。当前发布产物面向 Ubuntu/Linux x64。发布版本格式为 `v<上游版本>-share.<PATCH_REVISION>`；`release-metadata.json` 记录上游 tag、commit、补丁 commit、二进制 SHA256 和发布镜像 digest。
 
 本地 PostgreSQL 生命周期测试通过 `SHAREPATCH_TEST_DATABASE_URL` 启用，例如：
 
