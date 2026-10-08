@@ -276,11 +276,19 @@ def apply_codex_customizations(upstream: Path) -> None:
         "# Prefer env_key (variable NAME). Do not combine with experimental_bearer_token.\n",
         "remove remote catalog URL from Grok Codex configuration",
     )
-    patch_text(
+    # v0.2.14 enables discovery conditionally; the customization always uses it.
+    grok_features = "[features]\napi_key_model_discovery = true\n# goals = true`"
+    patch_text_variants(
         use_key_modal,
-        "# Optional:\n# [features]\n# goals = true`",
-        "[features]\napi_key_model_discovery = true\n# goals = true`",
+        [
+            ("# Optional:\n# [features]\n# goals = true`", grok_features),
+            (
+                "${codexModelCatalogMode.value === 'remote' ? '[features]\\napi_key_model_discovery = true\\n\\n# Optional:' : '# Optional:\\n# [features]'}\n# goals = true`",
+                grok_features,
+            ),
+        ],
         "enable endpoint model discovery in Grok Codex configuration",
+        grok_features,
     )
     patch_text(
         use_key_modal,
@@ -310,11 +318,18 @@ def apply_codex_customizations(upstream: Path) -> None:
         "env_key = \"SUB2API_API_KEY\"\n",
         "remove remote catalog URL from routed Codex configuration",
     )
-    patch_text(
+    routed_features = 'supports_websockets = false\n\n[features]\napi_key_model_discovery = true`'
+    patch_text_variants(
         use_key_modal,
-        'supports_websockets = false`',
-        'supports_websockets = false\n\n[features]\napi_key_model_discovery = true`',
+        [
+            ('supports_websockets = false`', routed_features),
+            (
+                "supports_websockets = false${codexModelCatalogMode.value === 'remote' ? '\\n\\n[features]\\napi_key_model_discovery = true' : ''}`",
+                routed_features,
+            ),
+        ],
         "enable endpoint model discovery in routed Codex configuration",
+        routed_features,
     )
 
     zh_dashboard = frontend / "i18n/locales/zh/dashboard.ts"
@@ -431,6 +446,17 @@ def apply_codex_customizations(upstream: Path) -> None:
         )
 
     use_key_modal_tests = frontend / "components/keys/__tests__/UseKeyModal.spec.ts"
+    patch_text(
+        use_key_modal_tests,
+        "    expect(configToml).toContain('supports_websockets = false')\n"
+        "    expect(configToml).toContain('grok-4.20-multi-agent-0309 (text / web_search)')\n",
+        "    expect(configToml).toContain('supports_websockets = false')\n"
+        "    expect(configToml).toContain('[features]\\napi_key_model_discovery = true')\n"
+        "    expect(configToml).not.toContain('model_catalog_url')\n"
+        "    expect(configToml).not.toContain('model_catalog_json')\n"
+        "    expect(configToml).toContain('grok-4.20-multi-agent-0309 (text / web_search)')\n",
+        "verify Grok endpoint discovery without catalog state",
+    )
     patch_text(
         use_key_modal_tests,
         "  it('keeps legacy OpenAI Codex config as the default', () => {\n",
