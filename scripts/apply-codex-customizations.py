@@ -471,18 +471,29 @@ def apply_codex_customizations(upstream: Path) -> None:
         "    expect(configToml).toContain('responses_websockets_v2 = true')\n",
         "expect WebSocket settings in the default OpenAI Codex configuration",
     )
-    patch_text(
-        use_key_modal_tests,
-        "    expect(configToml).toContain('[features]\\ngoals = true')\n",
-        "    expect(configToml).toContain('[features]\\napi_key_model_discovery = true\\nresponses_websockets_v2 = true\\ngoals = true')\n",
-        "expect live API model discovery in OpenAI Codex config",
-    )
-    patch_all(
-        use_key_modal_tests,
-        "    expect(configToml).toContain('[features]\\nresponses_websockets_v2 = true\\ngoals = true')\n",
-        "    expect(configToml).toContain('[features]\\napi_key_model_discovery = true\\nresponses_websockets_v2 = true\\ngoals = true')\n",
-        "expect endpoint model discovery in the WebSocket Codex test",
-    )
+    # v0.2.15 checks feature flags individually rather than depending on order.
+    feature_section = "    const features = configToml?.split('[features]\\n')[1]?.split('\\n[')[0]\n"
+    if feature_section in use_key_modal_tests.read_text():
+        patch_all(
+            use_key_modal_tests,
+            feature_section,
+            feature_section
+            + "    expect(features).toContain('api_key_model_discovery = true')\n",
+            "expect endpoint discovery in every OpenAI Codex feature section",
+        )
+    else:
+        patch_text(
+            use_key_modal_tests,
+            "    expect(configToml).toContain('[features]\\ngoals = true')\n",
+            "    expect(configToml).toContain('[features]\\napi_key_model_discovery = true\\nresponses_websockets_v2 = true\\ngoals = true')\n",
+            "expect live API model discovery in OpenAI Codex config",
+        )
+        patch_all(
+            use_key_modal_tests,
+            "    expect(configToml).toContain('[features]\\nresponses_websockets_v2 = true\\ngoals = true')\n",
+            "    expect(configToml).toContain('[features]\\napi_key_model_discovery = true\\nresponses_websockets_v2 = true\\ngoals = true')\n",
+            "expect endpoint model discovery in the WebSocket Codex test",
+        )
     patch_all(
         use_key_modal_tests,
         "expect(configToml).toContain('model = \"gpt-5.5\"')",
