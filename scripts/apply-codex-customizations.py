@@ -81,7 +81,7 @@ def patch_regex(path: Path, pattern: str, replacement: str, label: str, marker: 
     text = path.read_text()
     if marker in text:
         return
-    updated, count = re.subn(pattern, replacement, text, count=1, flags=re.MULTILINE)
+    updated, count = re.subn(pattern, replacement, text, flags=re.MULTILINE)
     if count != 1:
         fail(f"{label}: expected one regex anchor in {path}, found {count}")
     path.write_text(updated)
@@ -98,6 +98,14 @@ def apply_codex_customizations(upstream: Path) -> None:
     copy_tree(ROOT / "customizations/codex/frontend/src/sub2apiCodex", frontend / "sub2apiCodex")
 
     ccswitch_import = frontend / "utils/ccswitchImport.ts"
+    upstream_models = re.findall(
+        r"^export const OPENAI_CC_SWITCH_CODEX_MODEL = '([^'\n]+)'$",
+        ccswitch_import.read_text(),
+        flags=re.MULTILINE,
+    )
+    if len(upstream_models) != 1:
+        fail(f"expected one upstream Codex default model declaration, found {len(upstream_models)}")
+    upstream_codex_model = upstream_models[0]
     codex_model_import = "from '@/sub2apiCodex/codexWebsocketConfig'"
     if codex_model_import not in ccswitch_import.read_text():
         patch_text(
@@ -107,18 +115,23 @@ def apply_codex_customizations(upstream: Path) -> None:
             "import { CODEX_WEBSOCKET_DEFAULT_MODEL } from '@/sub2apiCodex/codexWebsocketConfig'\n",
             "share the Codex template model default with CCS import",
         )
-    patch_text(
+    # Match the declaration, not a particular upstream model release.
+    patch_regex(
         ccswitch_import,
-        "export const OPENAI_CC_SWITCH_CODEX_MODEL = 'gpt-5.5'\n",
+        r"^export const OPENAI_CC_SWITCH_CODEX_MODEL = '[^'\n]+'\n",
         "// The CCS Codex deeplink carries one model ID; keep it aligned with the tutorial.\n"
         "export const OPENAI_CC_SWITCH_CODEX_MODEL = CODEX_WEBSOCKET_DEFAULT_MODEL\n",
         "use the tutorial default model for CCS Codex imports",
+        "export const OPENAI_CC_SWITCH_CODEX_MODEL = CODEX_WEBSOCKET_DEFAULT_MODEL",
     )
-    remove_text(
-        ccswitch_import,
-        "    ['configFormat', 'json'],\n",
-        "omit config format when the CCS link carries no config payload",
-    )
+    # v0.2.20 embeds provider auth/headers in a JSON config payload.
+    # Keep its format hint; older links carry no config and must omit it.
+    if "entries.push(['config'," not in ccswitch_import.read_text():
+        remove_text(
+            ccswitch_import,
+            "    ['configFormat', 'json'],\n",
+            "omit config format when the CCS link carries no config payload",
+        )
 
     use_key_modal = frontend / "components/keys/UseKeyModal.vue"
     codex_config_import = "from '@/sub2apiCodex/codexWebsocketConfig'"
@@ -165,12 +178,17 @@ def apply_codex_customizations(upstream: Path) -> None:
         "remove the original non-WebSocket OpenAI Codex example",
         "Codex customization: use the WebSocket-only tutorial configuration.",
     )
-    patch_text(
+    patch_regex(
         use_key_modal,
-        "  const model = selectCodexCatalogModel('gpt-5.5')\n"
-        "  const reasoningEffortLine = codexReasoningEffortTomlLine(model)\n",
+        r"^  const model = selectCodexCatalogModel\('[^'\n]+'\)\n"
+        r"  const reasoningEffortLine = codexReasoningEffortTomlLine\(model\)\n",
         "  const model = CODEX_WEBSOCKET_DEFAULT_MODEL\n",
         "read the default Codex model from the editable tutorial template",
+        "  const model = CODEX_WEBSOCKET_DEFAULT_MODEL\n",
+    )
+    image_generation_config = (
+        "    imageGeneration: codexAuthMode.value === 'api-key',\n"
+        if "buildCodexApiKeyAuthConfig" in use_key_modal.read_text() else ""
     )
     patch_regex(
         use_key_modal,
@@ -178,7 +196,8 @@ def apply_codex_customizations(upstream: Path) -> None:
         "  const configContent = buildCodexWebsocketConfig({\n"
         "    baseUrl,\n"
         "    model,\n"
-        "    authConfig: generateCodexProviderAuthConfig(apiKey)\n"
+        + image_generation_config
+        + "    authConfig: generateCodexProviderAuthConfig(apiKey)\n"
         "  })\n",
         "use the repository-managed WebSocket configuration template",
         "const configContent = buildCodexWebsocketConfig({",
@@ -200,19 +219,20 @@ def apply_codex_customizations(upstream: Path) -> None:
         "remove Codex catalog state and path calculations",
         "Codex discovers models directly from the configured API endpoint.",
     )
-    patch_text(
+    patch_regex(
         use_key_modal,
+        r"watch\(\(\) => props.show, \(show\) => \{\n"
+        r"  if \(show\) \{\n"
+        r"    codexAuthMode.value = '(legacy|api-key)'\n"
+        r"  \} else \{\n"
+        r"    resetCodexModelManifest\(\)\n"
+        r"  \}\n"
+        r"\}\)\n",
         "watch(() => props.show, (show) => {\n"
-        "  if (show) {\n"
-        "    codexAuthMode.value = 'legacy'\n"
-        "  } else {\n"
-        "    resetCodexModelManifest()\n"
-        "  }\n"
-        "})\n",
-        "watch(() => props.show, (show) => {\n"
-        "  if (show) codexAuthMode.value = 'legacy'\n"
+        r"  if (show) codexAuthMode.value = '\1'" "\n"
         "})\n",
         "simplify Codex auth mode reset watcher",
+        "  if (show) codexAuthMode.value = ",
     )
     remove_text(
         use_key_modal,
@@ -247,6 +267,14 @@ def apply_codex_customizations(upstream: Path) -> None:
         "} from '@/utils/codexCatalogConfig'\n",
         "remove catalog parsing dependency",
     )
+    if "buildCodexApiKeyAuthConfig" in use_key_modal.read_text():
+        patch_regex(
+            use_key_modal,
+            r"^function escapeTomlBasicString\(value: string\): string \{\n[^\n]+\n\}\n\n",
+            "// Provider auth escaping is owned by the upstream auth helper.\n\n",
+            "remove the unused catalog TOML escaping helper",
+            "Provider auth escaping is owned by the upstream auth helper.",
+        )
 
     patch_text(
         use_key_modal,
@@ -457,11 +485,16 @@ def apply_codex_customizations(upstream: Path) -> None:
         "    expect(configToml).toContain('grok-4.20-multi-agent-0309 (text / web_search)')\n",
         "verify Grok endpoint discovery without catalog state",
     )
-    patch_text(
+    patch_text_variants(
         use_key_modal_tests,
-        "  it('keeps legacy OpenAI Codex config as the default', () => {\n",
-        "  it('keeps legacy OpenAI Codex WebSocket config as the default', () => {\n",
+        [
+            ("  it('keeps legacy OpenAI Codex config as the default', () => {\n",
+             "  it('keeps legacy OpenAI Codex WebSocket config as the default', () => {\n"),
+            ("  it('keeps legacy OpenAI Codex config available when selected', async () => {\n",
+             "  it('keeps legacy OpenAI Codex config available with WebSocket when selected', async () => {\n"),
+        ],
         "rename the OpenAI Codex default configuration expectation",
+        "keeps legacy OpenAI Codex WebSocket config as the default",
     )
     patch_text(
         use_key_modal_tests,
@@ -494,18 +527,21 @@ def apply_codex_customizations(upstream: Path) -> None:
             "    expect(configToml).toContain('[features]\\napi_key_model_discovery = true\\nresponses_websockets_v2 = true\\ngoals = true')\n",
             "expect endpoint model discovery in the WebSocket Codex test",
         )
-    patch_all(
+    patch_text(
         use_key_modal_tests,
-        "expect(configToml).toContain('model = \"gpt-5.5\"')",
-        "expect(configToml).toContain('model = \"gpt-6-luna\"')",
-        "update OpenAI Codex model expectation",
+        "import { nextTick } from 'vue'\n",
+        "import { nextTick } from 'vue'\n"
+        "import { CODEX_WEBSOCKET_DEFAULT_MODEL } from '@/sub2apiCodex/codexWebsocketConfig'\n",
+        "share the tutorial model with OpenAI configuration expectations",
     )
-    patch_all(
-        use_key_modal_tests,
-        "expect(configToml).toContain('review_model = \"gpt-5.5\"')",
-        "expect(configToml).toContain('review_model = \"gpt-6-luna\"')",
-        "update OpenAI Codex review model expectation",
-    )
+    for field in ("model", "review_model"):
+        text = use_key_modal_tests.read_text()
+        pattern = rf"expect\(configToml\)\.toContain\('{field} = \"{re.escape(upstream_codex_model)}\"'\)"
+        replacement = f'expect(configToml).toContain(`{field} = "${{CODEX_WEBSOCKET_DEFAULT_MODEL}}"`)'
+        updated, count = re.subn(pattern, lambda _: replacement, text)
+        if count == 0:
+            fail(f"OpenAI Codex {field} expectations are missing in {use_key_modal_tests}")
+        use_key_modal_tests.write_text(updated)
     patch_all(
         use_key_modal_tests,
         "expect(configToml).not.toContain('model_context_window')",
@@ -636,11 +672,12 @@ def apply_codex_customizations(upstream: Path) -> None:
             "import { CODEX_WEBSOCKET_DEFAULT_MODEL } from '@/sub2apiCodex/codexWebsocketConfig'\n",
             "test that CCS import tracks the Codex tutorial model",
         )
-    patch_text(
+    patch_regex(
         ccswitch_tests,
-        "expect(OPENAI_CC_SWITCH_CODEX_MODEL).toBe('gpt-5.5')",
+        r"expect\(OPENAI_CC_SWITCH_CODEX_MODEL\)\.toBe\('[^'\n]+'\)",
         "expect(OPENAI_CC_SWITCH_CODEX_MODEL).toBe(CODEX_WEBSOCKET_DEFAULT_MODEL)",
         "expect CCS import to use the shared Codex model default",
+        "expect(OPENAI_CC_SWITCH_CODEX_MODEL).toBe(CODEX_WEBSOCKET_DEFAULT_MODEL)",
     )
 
 

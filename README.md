@@ -34,9 +34,13 @@ go run -mod=mod github.com/google/wire/cmd/wire
 
 两个脚本都会要求明确传入 SHA，并拒绝工作树 SHA 不匹配或缺失唯一锚点的源码。只需要共享账单功能时，只运行 `apply-overlay.py`；Codex 教程定制由第二个脚本独立应用。目标工作树应保持干净；`.work/` 是本地测试数据，不会提交到补丁仓库。
 
+最近一次上游兼容性审查覆盖 v0.2.15–v0.2.20，发布来源、逐版本差异及验证范围见 [审查记录](docs/upstream-audit-2026-11-07.md)。v0.2.20 新增的管理 MCP 内部分发也应用共享账单限制，余额调整、订阅授予与续期不能通过 MCP 绕过限制。
+
 ### Codex 使用教程配置
 
 Codex 教程定制与共享账单 overlay 分开放置、分别应用。OpenAI 分组的“使用密钥”教程只显示“Codex CLI (WebSocket)”入口，并默认启用该配置。教程模板位于 [`customizations/codex/frontend/src/sub2apiCodex/codexWebsocketConfig.ts`](customizations/codex/frontend/src/sub2apiCodex/codexWebsocketConfig.ts)，模型默认值和配置文本可直接编辑；模板启用 `api_key_model_discovery = true`，Codex 会从 API 端点获取最新模型列表，前端不再提供本地模型目录下载。CI 与发布流程会依次应用两层补丁。
+
+默认模型继续由模板统一配置，CC Switch 导入同步使用该值。v0.2.20 起保留上游 API Key 默认认证、图片扩展认证头和 CC Switch 的 JSON 配置载荷；WebSocket 教程包含实时联网搜索，并仅在 API Key 模式启用图片生成功能。手动选择 legacy 模式时仍生成 `auth.json`，不启用 API Key 图片功能。
 
 ## 首次启用
 

@@ -4,6 +4,7 @@ export interface CodexWebsocketConfigValues {
   baseUrl: string
   model: string
   authConfig: string
+  imageGeneration?: boolean
 }
 
 function escapeTomlBasicString(value: string): string {
@@ -17,6 +18,7 @@ export function buildCodexWebsocketConfig(values: CodexWebsocketConfigValues): s
   return `model_provider = "OpenAI"
 model = "${model}"
 review_model = "${model}"
+web_search = "live"
 model_context_window = 1000000
 model_auto_compact_token_limit = 900000
 
@@ -29,6 +31,6 @@ ${values.authConfig}
 
 [features]
 api_key_model_discovery = true
-responses_websockets_v2 = true
+${values.imageGeneration ? 'image_generation = true\n' : ''}responses_websockets_v2 = true
 goals = true`
 }
