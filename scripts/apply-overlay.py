@@ -60,7 +60,7 @@ def patch_regex(path: Path, pattern: str, replacement: str, label: str, marker: 
     text = path.read_text()
     if marker in text:
         return
-    updated, count = re.subn(pattern, replacement, text, count=1, flags=re.MULTILINE)
+    updated, count = re.subn(pattern, replacement, text, flags=re.MULTILINE)
     if count != 1:
         fail(f"{label}: expected one regex anchor in {path}, found {count}")
     path.write_text(updated)
@@ -187,6 +187,21 @@ def apply_backend(upstream: Path, patch_repo: str) -> None:
         "\tr.Use(middleware2.Recovery())\n\tr.Use(handlers.Sharepatch.Gate())\n",
         "shared billing request gate",
     )
+
+    # v0.2.20 dispatches MCP tools through a separate Gin engine. The outer
+    # request's /mcp path cannot enforce the target REST operation's guards.
+    mcp_routes = backend / "internal/server/routes/mcp.go"
+    if mcp_routes.exists():
+        patch_text(
+            mcp_routes,
+            "\tinner.Use(gin.Recovery())\n",
+            "\tinner.Use(gin.Recovery())\n\tinner.Use(h.Sharepatch.Gate())\n",
+            "enforce shared billing restrictions on MCP management dispatch",
+        )
+        shutil.copy2(
+            ROOT / "overlay/backend/internal/server/routes/mcp_sharepatch_test.go",
+            mcp_routes.with_name("mcp_sharepatch_test.go"),
+        )
 
     billing_file = backend / "internal/repository/usage_billing_repo.go"
     patch_text(
@@ -397,6 +412,8 @@ def apply_backend(upstream: Path, patch_repo: str) -> None:
         backend / "internal/sharepatch/decimal_test.go",
         backend / "internal/service/update_service_sharepatch_test.go",
     ]
+    if mcp_routes.exists():
+        gofmt_files.extend([mcp_routes, mcp_routes.with_name("mcp_sharepatch_test.go")])
     run("gofmt", "-w", *[str(path) for path in gofmt_files], cwd=upstream)
 
 

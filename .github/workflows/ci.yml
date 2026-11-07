@@ -32,6 +32,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Check patch anchor guards
+        run: python3 -m unittest discover -s scripts/tests
+
       - name: Resolve latest upstream formal release
         id: baseline
         env:
