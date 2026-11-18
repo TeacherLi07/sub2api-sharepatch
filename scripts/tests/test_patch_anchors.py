@@ -28,5 +28,62 @@ class PatchAnchorTests(unittest.TestCase):
                         script.patch_regex(path, r"^anchor$", "patched", "test", "patched")
                     self.assertEqual(path.read_text(), source)
 
+    def test_payment_route_is_located_without_matching_its_arguments(self):
+        overlay = load_script("apply-overlay")
+        for call in ("\troutes.RegisterPaymentRoutes(v1, addedDependency)\n", "\troutes.RegisterPaymentRoutes(\n\t\tv1,\n\t)\n"):
+            with self.subTest(call=call), tempfile.TemporaryDirectory() as temp:
+                router = Path(temp) / "router.go"
+                router.write_text(call)
+                overlay.register_sharepatch_routes(router)
+                overlay.register_sharepatch_routes(router)
+                self.assertEqual(router.read_text().count("routes.RegisterSharepatchRoutes("), 1)
+                self.assertTrue(router.read_text().endswith(call))
+
+                router.write_text(call * 2)
+                with self.assertRaisesRegex(SystemExit, "shared billing API route registration:.*found 2"):
+                    overlay.register_sharepatch_routes(router)
+                self.assertEqual(router.read_text(), call * 2)
+
+    def test_ccswitch_model_anchor_accepts_new_models_and_ts_formatting(self):
+        codex = load_script("apply-codex-customizations")
+        source = (
+            'import type {GroupPlatform} from "@/types";\n'
+            'export const OPENAI_CC_SWITCH_CODEX_MODEL: string = "new-upstream-model";\n'
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "ccswitchImport.ts"
+            path.write_text(source)
+            self.assertEqual(codex.patch_ccswitch_default_model(path), "new-upstream-model")
+            updated = path.read_text()
+            self.assertIn("import { CODEX_WEBSOCKET_DEFAULT_MODEL }", updated)
+            self.assertIn("export const OPENAI_CC_SWITCH_CODEX_MODEL = CODEX_WEBSOCKET_DEFAULT_MODEL", updated)
+
+            path.write_text(source * 2)
+            with self.assertRaisesRegex(SystemExit, "default model declaration.*found 2"):
+                codex.patch_ccswitch_default_model(path)
+            self.assertEqual(path.read_text(), source * 2)
+
+    def test_ultrafast_fixture_preserves_current_wording_and_valid_assertions(self):
+        overlay = load_script("apply-overlay")
+        old = '        ultrafastHint: expect.stringContaining("service_tier=ultrafast"),\n'
+        with tempfile.TemporaryDirectory() as temp:
+            frontend = Path(temp)
+            test_file = frontend / "views/admin/__tests__/groupsOpenAIFast.spec.ts"
+            test_file.parent.mkdir(parents=True)
+            test_file.write_text(old)
+            locales = [frontend / f"i18n/locales/{locale}/admin/overview.ts" for locale in ("zh", "en")]
+            for locale in locales:
+                locale.parent.mkdir(parents=True)
+                locale.write_text("        ultrafastHint: 'Sets service_tier=ultrafast',\n")
+            overlay.fix_ultrafast_locale_test(frontend)
+            self.assertEqual(test_file.read_text(), old)
+
+            translated = '        ultrafastHint: "选择已支持的加速档位",\n'
+            locales[0].write_text(translated)
+            overlay.fix_ultrafast_locale_test(frontend)
+            self.assertIn("ultrafastHint: expect.any(String)", test_file.read_text())
+            self.assertEqual(locales[0].read_text(), translated)
+
+
 if __name__ == "__main__":
     unittest.main()

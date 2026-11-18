@@ -11,6 +11,10 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+CCSWITCH_MODEL_DECLARATION = (
+    r"^export[ \t]+const[ \t]+OPENAI_CC_SWITCH_CODEX_MODEL"
+    r"(?:[ \t]*:[ \t]*string)?[ \t]*=[ \t]*(['\"])([^'\"\n]+)\1[ \t]*;?[ \t]*$"
+)
 
 
 def fail(message: str) -> None:
@@ -93,37 +97,35 @@ def copy_tree(source: Path, destination: Path) -> None:
     shutil.copytree(source, destination, dirs_exist_ok=True)
 
 
+def patch_ccswitch_default_model(ccswitch_import: Path) -> str:
+    source = ccswitch_import.read_text()
+    upstream_models = re.findall(CCSWITCH_MODEL_DECLARATION, source, flags=re.MULTILINE)
+    if len(upstream_models) != 1:
+        fail(f"expected one upstream Codex default model declaration in {ccswitch_import}, found {len(upstream_models)}")
+    patch_regex(
+        ccswitch_import,
+        r"^import[ \t]+type[ \t]+\{[ \t]*GroupPlatform[ \t]*\}[ \t]+from[ \t]+(['\"])@/types\1[ \t]*;?[ \t]*$",
+        r"\g<0>" + "\nimport { CODEX_WEBSOCKET_DEFAULT_MODEL } from '@/sub2apiCodex/codexWebsocketConfig'",
+        "share the Codex template model default with CCS import",
+        "/sub2apiCodex/codexWebsocketConfig",
+    )
+    patch_regex(
+        ccswitch_import,
+        CCSWITCH_MODEL_DECLARATION,
+        "// The CCS Codex deeplink carries one model ID; keep it aligned with the tutorial.\n"
+        "export const OPENAI_CC_SWITCH_CODEX_MODEL = CODEX_WEBSOCKET_DEFAULT_MODEL",
+        "use the tutorial default model for CCS Codex imports",
+        "export const OPENAI_CC_SWITCH_CODEX_MODEL = CODEX_WEBSOCKET_DEFAULT_MODEL",
+    )
+    return upstream_models[0][1]
+
+
 def apply_codex_customizations(upstream: Path) -> None:
     frontend = upstream / "frontend/src"
     copy_tree(ROOT / "customizations/codex/frontend/src/sub2apiCodex", frontend / "sub2apiCodex")
 
     ccswitch_import = frontend / "utils/ccswitchImport.ts"
-    upstream_models = re.findall(
-        r"^export const OPENAI_CC_SWITCH_CODEX_MODEL = '([^'\n]+)'$",
-        ccswitch_import.read_text(),
-        flags=re.MULTILINE,
-    )
-    if len(upstream_models) != 1:
-        fail(f"expected one upstream Codex default model declaration, found {len(upstream_models)}")
-    upstream_codex_model = upstream_models[0]
-    codex_model_import = "from '@/sub2apiCodex/codexWebsocketConfig'"
-    if codex_model_import not in ccswitch_import.read_text():
-        patch_text(
-            ccswitch_import,
-            "import type { GroupPlatform } from '@/types'\n",
-            "import type { GroupPlatform } from '@/types'\n"
-            "import { CODEX_WEBSOCKET_DEFAULT_MODEL } from '@/sub2apiCodex/codexWebsocketConfig'\n",
-            "share the Codex template model default with CCS import",
-        )
-    # Match the declaration, not a particular upstream model release.
-    patch_regex(
-        ccswitch_import,
-        r"^export const OPENAI_CC_SWITCH_CODEX_MODEL = '[^'\n]+'\n",
-        "// The CCS Codex deeplink carries one model ID; keep it aligned with the tutorial.\n"
-        "export const OPENAI_CC_SWITCH_CODEX_MODEL = CODEX_WEBSOCKET_DEFAULT_MODEL\n",
-        "use the tutorial default model for CCS Codex imports",
-        "export const OPENAI_CC_SWITCH_CODEX_MODEL = CODEX_WEBSOCKET_DEFAULT_MODEL",
-    )
+    upstream_codex_model = patch_ccswitch_default_model(ccswitch_import)
     # v0.2.20 embeds provider auth/headers in a JSON config payload.
     # Keep its format hint; older links carry no config and must omit it.
     if "entries.push(['config'," not in ccswitch_import.read_text():

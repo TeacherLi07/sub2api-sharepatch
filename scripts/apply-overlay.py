@@ -80,6 +80,16 @@ def infer_github_repo() -> str:
     return match.group(1)
 
 
+def register_sharepatch_routes(router: Path) -> None:
+    patch_regex(
+        router,
+        r"^([ \t]+)(routes\.RegisterPaymentRoutes\()",
+        r"\1routes.RegisterSharepatchRoutes(v1, h.Sharepatch, jwtAuth, adminAuth, auditLog)\n\1\2",
+        "shared billing API route registration",
+        "routes.RegisterSharepatchRoutes(v1, h.Sharepatch, jwtAuth, adminAuth, auditLog)",
+    )
+
+
 def apply_backend(upstream: Path, patch_repo: str) -> None:
     backend = upstream / "backend"
     copy_tree(ROOT / "overlay/backend/internal/sharepatch", backend / "internal/sharepatch")
@@ -125,14 +135,13 @@ def apply_backend(upstream: Path, patch_repo: str) -> None:
         "\treturn sharepatch.NewHandler(db, cfg.RunMode)\n"
         "}\n\n"
     )
-    wire_text = handler_wire.read_text()
-    if "func ProvideSharepatchHandler(" not in wire_text:
-        marker = "// ProviderSet is the Wire provider set for all handlers\n"
-        at = wire_text.find(marker)
-        if at < 0:
-            fail("handler wire provider-set anchor is missing")
-        wire_text = wire_text[:at] + insert + wire_text[at:]
-        handler_wire.write_text(wire_text)
+    patch_regex(
+        handler_wire,
+        r"^(?://[^\n]*\n)*var[ \t]+ProviderSet[ \t]*=[ \t]*wire\.NewSet\(",
+        insert + r"\g<0>",
+        "sharepatch handler provider",
+        "func ProvideSharepatchHandler(",
+    )
 
     patch_regex(
         handler_wire,
@@ -156,13 +165,7 @@ def apply_backend(upstream: Path, patch_repo: str) -> None:
     )
 
     router_file = backend / "internal/server/router.go"
-    patch_text(
-        router_file,
-        "\troutes.RegisterPaymentRoutes(v1, h.Payment, h.PaymentWebhook, h.Admin.Payment, jwtAuth, adminAuth, auditLog, settingService, panelRateLimiter, redisClient)\n",
-        "\troutes.RegisterPaymentRoutes(v1, h.Payment, h.PaymentWebhook, h.Admin.Payment, jwtAuth, adminAuth, auditLog, settingService, panelRateLimiter, redisClient)\n"
-        "\troutes.RegisterSharepatchRoutes(v1, h.Sharepatch, jwtAuth, adminAuth, auditLog)\n",
-        "shared billing API route registration",
-    )
+    register_sharepatch_routes(router_file)
     admin_user_handler = backend / "internal/handler/admin/user_handler.go"
     patch_text(
         admin_user_handler,
@@ -215,6 +218,24 @@ def apply_backend(upstream: Path, patch_repo: str) -> None:
         "\t}\n\n\tresult := &service.UsageBillingApplyResult{Applied: true}\n",
         "billing transaction marker",
     )
+
+    batch_billing_file = billing_file.with_name("usage_billing_batch_repo.go")
+    billing_contract = backend / "internal/service/usage_billing.go"
+    if not batch_billing_file.is_file() and "type UsageBillingBatchRepository interface" in billing_contract.read_text():
+        fail(f"batch billing is available but its repository source is missing: {batch_billing_file}")
+    if batch_billing_file.exists():
+        # ApplyBatch claims request keys before entering the balance helper.
+        # Only a batch with newly claimed balance charges reaches the update.
+        patch_text(
+            batch_billing_file,
+            "\tgroup := groups[userID]\n\tif group == nil {\n\t\treturn nil\n\t}\n\n\tvar newBalance decimal.Decimal\n",
+            "\tgroup := groups[userID]\n\tif group == nil {\n\t\treturn nil\n\t}\n"
+            "\tif _, err := tx.ExecContext(ctx, `SELECT set_config('sharepatch.billing', 'on', TRUE)`); err != nil {\n"
+            "\t\treturn err\n\t}\n\n\tvar newBalance decimal.Decimal\n",
+            "batch billing transaction marker",
+        )
+        batch_test = backend / "internal/sharepatch/batch_billing_test.go"
+        shutil.copy2(ROOT / "overlay/backend/tests/batch_billing_test.go", batch_test)
 
     legacy_file = backend / "internal/service/gateway_usage_billing.go"
     patch_text(
@@ -414,12 +435,39 @@ def apply_backend(upstream: Path, patch_repo: str) -> None:
     ]
     if mcp_routes.exists():
         gofmt_files.extend([mcp_routes, mcp_routes.with_name("mcp_sharepatch_test.go")])
+    if batch_billing_file.exists():
+        gofmt_files.extend([batch_billing_file, batch_test])
     run("gofmt", "-w", *[str(path) for path in gofmt_files], cwd=upstream)
+
+
+def fix_ultrafast_locale_test(frontend: Path) -> None:
+    # v0.2.23 updated both hints but left the old protocol literal in the test.
+    test = frontend / "views/admin/__tests__/groupsOpenAIFast.spec.ts"
+    old = '        ultrafastHint: expect.stringContaining("service_tier=ultrafast"),\n'
+    if not test.is_file() or old not in test.read_text():
+        return
+    has_stale_assertion = False
+    for locale in ("zh", "en"):
+        path = frontend / f"i18n/locales/{locale}/admin/overview.ts"
+        hints = re.findall(r"^[ \t]*ultrafastHint:[ \t]*(.+)$", path.read_text(), re.MULTILINE)
+        if len(hints) != 1:
+            fail(f"Ultra Fast help text: expected one declaration in {path}, found {len(hints)}")
+        has_stale_assertion |= "service_tier=ultrafast" not in hints[0]
+    if not has_stale_assertion:
+        return
+    # The remaining assertions already verify the supported models in each hint.
+    patch_text(
+        test,
+        old,
+        '        ultrafastHint: expect.any(String),\n',
+        "align Ultra Fast localization test with upstream help text",
+    )
 
 
 def apply_frontend(upstream: Path) -> None:
     frontend = upstream / "frontend/src"
     copy_tree(ROOT / "overlay/frontend/src/sharepatch", frontend / "sharepatch")
+    fix_ultrafast_locale_test(frontend)
 
     app_header = frontend / "components/layout/AppHeader.vue"
     header_summary = (

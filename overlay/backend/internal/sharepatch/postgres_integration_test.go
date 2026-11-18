@@ -15,13 +15,14 @@ import (
 	_ "github.com/lib/pq"
 )
 
-func TestPostgresLifecycleAndGuards(t *testing.T) {
+func OpenPostgresTestFixture(t *testing.T) (context.Context, *sql.DB) {
+	t.Helper()
 	dsn := os.Getenv("SHAREPATCH_TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("SHAREPATCH_TEST_DATABASE_URL is not set")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	t.Cleanup(cancel)
 	adminDB, err := sql.Open("postgres", dsn)
 	if err != nil {
 		t.Fatal(err)
@@ -78,6 +79,11 @@ func TestPostgresLifecycleAndGuards(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	return ctx, db
+}
+
+func TestPostgresLifecycleAndGuards(t *testing.T) {
+	ctx, db := OpenPostgresTestFixture(t)
 	var firstUser, disabledUser, removableUser int64
 	for _, user := range []struct {
 		email string
