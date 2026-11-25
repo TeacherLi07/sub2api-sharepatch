@@ -464,10 +464,39 @@ def fix_ultrafast_locale_test(frontend: Path) -> None:
     )
 
 
+def fix_account_homepage_layout_test(frontend: Path) -> None:
+    # v0.2.25 moved the tooltip into a centered row for the group-sync button
+    # (upstream a95c9e2), but its test still expects the old column alignment.
+    test = frontend / "views/admin/__tests__/AccountsView.sparkShadow.spec.ts"
+    view = frontend / "views/admin/AccountsView.vue"
+    old = "    expect(tooltip.classes()).toEqual(expect.arrayContaining(['self-start']))\n"
+    if not test.is_file() or old not in test.read_text():
+        return
+    layout = (
+        '              <div class="flex items-center gap-1">\n'
+        '                <HelpTooltip\n'
+        '                  v-if="accountHomepageUrl(row)"\n'
+        '                  :content="accountHomepageUrl(row)"\n'
+        '                  width-class="w-max max-w-sm break-all"\n'
+        '                  class="-ml-1"\n'
+    )
+    if layout not in view.read_text():
+        return  # Older layouts still require self-start.
+    if view.read_text().count(layout) != 1:
+        fail("account homepage layout: expected one centered row")
+    patch_text(
+        test,
+        old,
+        "    expect(Array.from(tooltip.element.parentElement?.classList ?? [])).toEqual(expect.arrayContaining(['flex', 'items-center', 'gap-1']))\n",
+        "align account homepage test with upstream centered row",
+    )
+
+
 def apply_frontend(upstream: Path) -> None:
     frontend = upstream / "frontend/src"
     copy_tree(ROOT / "overlay/frontend/src/sharepatch", frontend / "sharepatch")
     fix_ultrafast_locale_test(frontend)
+    fix_account_homepage_layout_test(frontend)
 
     app_header = frontend / "components/layout/AppHeader.vue"
     header_summary = (

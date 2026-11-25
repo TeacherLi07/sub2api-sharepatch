@@ -63,6 +63,45 @@ class PatchAnchorTests(unittest.TestCase):
                 codex.patch_ccswitch_default_model(path)
             self.assertEqual(path.read_text(), source * 2)
 
+    def test_account_homepage_fixture_tracks_only_the_centered_row_layout(self):
+        overlay = load_script("apply-overlay")
+        old = "    expect(tooltip.classes()).toEqual(expect.arrayContaining(['self-start']))\n"
+        layout = (
+            '              <div class="flex items-center gap-1">\n'
+            '                <HelpTooltip\n'
+            '                  v-if="accountHomepageUrl(row)"\n'
+            '                  :content="accountHomepageUrl(row)"\n'
+            '                  width-class="w-max max-w-sm break-all"\n'
+            '                  class="-ml-1"\n'
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            frontend = Path(temp)
+            test = frontend / "views/admin/__tests__/AccountsView.sparkShadow.spec.ts"
+            test.parent.mkdir(parents=True)
+            view = frontend / "views/admin/AccountsView.vue"
+            test.write_text(old)
+            view.write_text(layout.replace('class="-ml-1"', 'class="-ml-1 self-start"'))
+            overlay.fix_account_homepage_layout_test(frontend)
+            self.assertEqual(test.read_text(), old)
+
+            view.write_text(layout)
+            overlay.fix_account_homepage_layout_test(frontend)
+            updated = test.read_text()
+            self.assertIn("['flex', 'items-center', 'gap-1']", updated)
+            overlay.fix_account_homepage_layout_test(frontend)
+            self.assertEqual(test.read_text(), updated)
+            self.assertEqual(view.read_text(), layout)
+
+            test.write_text(old * 2)
+            with self.assertRaisesRegex(SystemExit, "expected one anchor.*found 2"):
+                overlay.fix_account_homepage_layout_test(frontend)
+            self.assertEqual(test.read_text(), old * 2)
+            test.write_text(old)
+            view.write_text(layout * 2)
+            with self.assertRaisesRegex(SystemExit, "expected one centered row"):
+                overlay.fix_account_homepage_layout_test(frontend)
+            self.assertEqual(test.read_text(), old)
+
     def test_ultrafast_fixture_preserves_current_wording_and_valid_assertions(self):
         overlay = load_script("apply-overlay")
         old = '        ultrafastHint: expect.stringContaining("service_tier=ultrafast"),\n'
