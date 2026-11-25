@@ -1,0 +1,9 @@
+{
+  "pull_request": "https://github.com/Wei-Shaw/sub2api/pull/9024",
+  "source_repository": "TeacherLi07/sub2api",
+  "source_branch": "fix/codex-pool-quota-error",
+  "base_commit": "328db26f450edbdf9f8d4344a3ea903ac6396842",
+  "head_commit": "06629eb94471889b2509c6e9b0470ece909a6a75",
+  "patch_file": "pr-9024.patch",
+  "patch_sha256": "03a3b2e9cb87d8bd99f2d02aabcd539c2a4056ee7ba9fc40638fab0f42b0ffbc"
+}

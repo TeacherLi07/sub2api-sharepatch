@@ -12,7 +12,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from release_assets import archive_name, normalize_version, prepare_context, sha256, write_checksums
+from release_assets import archive_name, codex_quota_manifest, normalize_version, prepare_context, sha256, write_checksums
 
 
 TARGET_OS = "linux"
@@ -43,6 +43,14 @@ def main() -> None:
     actual_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=upstream, text=True).strip()
     if actual_sha != args.upstream_sha:
         raise SystemExit(f"checkout SHA is {actual_sha}; expected exactly {args.upstream_sha}")
+    quota_manifest = codex_quota_manifest()
+    quota_patch = Path(__file__).resolve().parents[1] / "customizations/codex-pool-quota/pr-9024.patch"
+    checked = subprocess.run(
+        ["git", "apply", "--reverse", "--check", str(quota_patch)],
+        cwd=upstream, text=True, capture_output=True, check=False,
+    )
+    if checked.returncode:
+        raise SystemExit("Codex quota patch is missing or changed; refusing to build with incorrect provenance")
     patch_commit = os.environ.get("GITHUB_SHA", "local")
     build_date = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -83,6 +91,7 @@ def main() -> None:
         "archive": archive.name,
         "binary_sha256": binary_digest,
         "image_repository": "ghcr.io/" + args.patch_repo.lower(),
+        "codex_pool_quota_patch": quota_manifest,
     }
     metadata_path = output / "release-metadata.json"
     metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")

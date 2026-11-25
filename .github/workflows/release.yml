@@ -91,6 +91,7 @@ jobs:
       NO_PROXY: 127.0.0.1,localhost,::1
       SHAREPATCH_REPO: ${{ github.repository }}
       SHAREPATCH_TEST_DATABASE_URL: postgres://sharepatch:sharepatch@127.0.0.1:5432/sharepatch_test?sslmode=disable
+      CODEX_POOL_QUOTA_TEST_DSN: host=127.0.0.1 port=5432 user=sharepatch password=sharepatch dbname=sharepatch_test sslmode=disable
       SHAREPATCH_VERSION: v${{ needs.resolve.outputs.version }}
       SHAREPATCH_PRERELEASE: ${{ needs.resolve.outputs.prerelease }}
       UPSTREAM_SHA: ${{ needs.resolve.outputs.sha }}
@@ -124,8 +125,11 @@ jobs:
           cache: pnpm
           cache-dependency-path: upstream/frontend/pnpm-lock.yaml
 
-      - name: Apply sharepatch and Codex customization to the resolved upstream commit
+      - name: Apply pinned Codex quota fix, sharepatch, and tutorial to the upstream commit
         run: |
+          python3 scripts/apply-codex-pool-quota.py \
+            --upstream upstream \
+            --upstream-sha "$UPSTREAM_SHA"
           python3 scripts/apply-overlay.py \
             --upstream upstream \
             --upstream-sha "$UPSTREAM_SHA" \
@@ -218,6 +222,7 @@ jobs:
 
           - Upstream source commit: ${UPSTREAM_SHA}
           - Patch commit: ${GITHUB_SHA}
+          - Includes pinned Codex pool quota recovery fix: https://github.com/Wei-Shaw/sub2api/pull/9024 (06629eb94471889b2509c6e9b0470ece909a6a75)
           - Docker image: ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]'):${SHAREPATCH_VERSION}
           - Compose users can update only the application image to the GHCR image above.
           EOF

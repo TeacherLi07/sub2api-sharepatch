@@ -1,0 +1,3824 @@
+diff --git a/backend/ent/group.go b/backend/ent/group.go
+index e4763f50d..74073279c 100644
+--- a/backend/ent/group.go
++++ b/backend/ent/group.go
+@@ -130,6 +130,8 @@ type Group struct {
+ 	ForceOpenaiFast bool `json:"force_openai_fast,omitempty"`
+ 	// 是否对支持 Ultrafast 的模型强制使用 service_tier=ultrafast（优先于 force_openai_fast）
+ 	ForceOpenaiUltrafast bool `json:"force_openai_ultrafast,omitempty"`
++	// Return the known Codex quota reset when this group has no available accounts
++	OpenaiCodexPoolQuotaErrorEnabled bool `json:"openai_codex_pool_quota_error_enabled,omitempty"`
+ 	// 是否让此 OpenAI/Composite 分组的 Fast 请求按 Standard 价格计费
+ 	FreeOpenaiFast bool `json:"free_openai_fast,omitempty"`
+ 	// 仅允许非 apikey 类型账号关联到此分组
+@@ -266,7 +268,7 @@ func (*Group) scanValues(columns []string) ([]any, error) {
+ 		switch columns[i] {
+ 		case group.FieldI18n, group.FieldVideoModelPrices, group.FieldModelPricing, group.FieldModelRouting, group.FieldSupportedModelScopes, group.FieldMessagesDispatchModelConfig, group.FieldModelAllowlist, group.FieldCodexModelsManifestConfig, group.FieldReasoningEffortMappings:
+ 			values[i] = new([]byte)
+-		case group.FieldPeakRateEnabled, group.FieldIsExclusive, group.FieldAllowImageGeneration, group.FieldAllowBatchImageGeneration, group.FieldImageCountBilling, group.FieldImageRateIndependent, group.FieldVideoRateIndependent, group.FieldLongContextPricingEnabled, group.FieldClaudeCodeOnly, group.FieldModelRoutingEnabled, group.FieldMcpXMLInject, group.FieldAllowMessagesDispatch, group.FieldAllowLive, group.FieldForceOpenaiFast, group.FieldForceOpenaiUltrafast, group.FieldFreeOpenaiFast, group.FieldRequireOauthOnly, group.FieldRequirePrivacySet, group.FieldProfitControlEnabled:
++		case group.FieldPeakRateEnabled, group.FieldIsExclusive, group.FieldAllowImageGeneration, group.FieldAllowBatchImageGeneration, group.FieldImageCountBilling, group.FieldImageRateIndependent, group.FieldVideoRateIndependent, group.FieldLongContextPricingEnabled, group.FieldClaudeCodeOnly, group.FieldModelRoutingEnabled, group.FieldMcpXMLInject, group.FieldAllowMessagesDispatch, group.FieldAllowLive, group.FieldForceOpenaiFast, group.FieldForceOpenaiUltrafast, group.FieldOpenaiCodexPoolQuotaErrorEnabled, group.FieldFreeOpenaiFast, group.FieldRequireOauthOnly, group.FieldRequirePrivacySet, group.FieldProfitControlEnabled:
+ 			values[i] = new(sql.NullBool)
+ 		case group.FieldRateMultiplier, group.FieldPeakRateMultiplier, group.FieldDailyLimitUsd, group.FieldWeeklyLimitUsd, group.FieldMonthlyLimitUsd, group.FieldImageRateMultiplier, group.FieldImagePrice1k, group.FieldImagePrice2k, group.FieldImagePrice4k, group.FieldBatchImageDiscountMultiplier, group.FieldBatchImageHoldMultiplier, group.FieldVideoRateMultiplier, group.FieldVideoPrice480p, group.FieldVideoPrice720p, group.FieldVideoPrice1080p, group.FieldWebSearchPricePerCall, group.FieldSearchPricePer1k, group.FieldAudioRealtimePricePerMin, group.FieldAudioTtsPricePerMillionChars, group.FieldAudioSttPricePerHour, group.FieldProfitMinMargin, group.FieldProfitSafetyBuffer:
+ 			values[i] = new(sql.NullFloat64)
+@@ -656,6 +658,12 @@ func (_m *Group) assignValues(columns []string, values []any) error {
+ 			} else if value.Valid {
+ 				_m.ForceOpenaiUltrafast = value.Bool
+ 			}
++		case group.FieldOpenaiCodexPoolQuotaErrorEnabled:
++			if value, ok := values[i].(*sql.NullBool); !ok {
++				return fmt.Errorf("unexpected type %T for field openai_codex_pool_quota_error_enabled", values[i])
++			} else if value.Valid {
++				_m.OpenaiCodexPoolQuotaErrorEnabled = value.Bool
++			}
+ 		case group.FieldFreeOpenaiFast:
+ 			if value, ok := values[i].(*sql.NullBool); !ok {
+ 				return fmt.Errorf("unexpected type %T for field free_openai_fast", values[i])
+@@ -1027,6 +1035,9 @@ func (_m *Group) String() string {
+ 	builder.WriteString("force_openai_ultrafast=")
+ 	builder.WriteString(fmt.Sprintf("%v", _m.ForceOpenaiUltrafast))
+ 	builder.WriteString(", ")
++	builder.WriteString("openai_codex_pool_quota_error_enabled=")
++	builder.WriteString(fmt.Sprintf("%v", _m.OpenaiCodexPoolQuotaErrorEnabled))
++	builder.WriteString(", ")
+ 	builder.WriteString("free_openai_fast=")
+ 	builder.WriteString(fmt.Sprintf("%v", _m.FreeOpenaiFast))
+ 	builder.WriteString(", ")
+diff --git a/backend/ent/group/group.go b/backend/ent/group/group.go
+index 6b72d0c1d..395d72fce 100644
+--- a/backend/ent/group/group.go
++++ b/backend/ent/group/group.go
+@@ -126,6 +126,8 @@ const (
+ 	FieldForceOpenaiFast = "force_openai_fast"
+ 	// FieldForceOpenaiUltrafast holds the string denoting the force_openai_ultrafast field in the database.
+ 	FieldForceOpenaiUltrafast = "force_openai_ultrafast"
++	// FieldOpenaiCodexPoolQuotaErrorEnabled holds the string denoting the openai_codex_pool_quota_error_enabled field in the database.
++	FieldOpenaiCodexPoolQuotaErrorEnabled = "openai_codex_pool_quota_error_enabled"
+ 	// FieldFreeOpenaiFast holds the string denoting the free_openai_fast field in the database.
+ 	FieldFreeOpenaiFast = "free_openai_fast"
+ 	// FieldRequireOauthOnly holds the string denoting the require_oauth_only field in the database.
+@@ -284,6 +286,7 @@ var Columns = []string{
+ 	FieldAllowLive,
+ 	FieldForceOpenaiFast,
+ 	FieldForceOpenaiUltrafast,
++	FieldOpenaiCodexPoolQuotaErrorEnabled,
+ 	FieldFreeOpenaiFast,
+ 	FieldRequireOauthOnly,
+ 	FieldRequirePrivacySet,
+@@ -415,6 +418,8 @@ var (
+ 	DefaultForceOpenaiFast bool
+ 	// DefaultForceOpenaiUltrafast holds the default value on creation for the "force_openai_ultrafast" field.
+ 	DefaultForceOpenaiUltrafast bool
++	// DefaultOpenaiCodexPoolQuotaErrorEnabled holds the default value on creation for the "openai_codex_pool_quota_error_enabled" field.
++	DefaultOpenaiCodexPoolQuotaErrorEnabled bool
+ 	// DefaultFreeOpenaiFast holds the default value on creation for the "free_openai_fast" field.
+ 	DefaultFreeOpenaiFast bool
+ 	// DefaultRequireOauthOnly holds the default value on creation for the "require_oauth_only" field.
+@@ -709,6 +714,11 @@ func ByForceOpenaiUltrafast(opts ...sql.OrderTermOption) OrderOption {
+ 	return sql.OrderByField(FieldForceOpenaiUltrafast, opts...).ToFunc()
+ }
+ 
++// ByOpenaiCodexPoolQuotaErrorEnabled orders the results by the openai_codex_pool_quota_error_enabled field.
++func ByOpenaiCodexPoolQuotaErrorEnabled(opts ...sql.OrderTermOption) OrderOption {
++	return sql.OrderByField(FieldOpenaiCodexPoolQuotaErrorEnabled, opts...).ToFunc()
++}
++
+ // ByFreeOpenaiFast orders the results by the free_openai_fast field.
+ func ByFreeOpenaiFast(opts ...sql.OrderTermOption) OrderOption {
+ 	return sql.OrderByField(FieldFreeOpenaiFast, opts...).ToFunc()
+diff --git a/backend/ent/group/where.go b/backend/ent/group/where.go
+index ba1049f55..85d457c32 100644
+--- a/backend/ent/group/where.go
++++ b/backend/ent/group/where.go
+@@ -305,6 +305,11 @@ func ForceOpenaiUltrafast(v bool) predicate.Group {
+ 	return predicate.Group(sql.FieldEQ(FieldForceOpenaiUltrafast, v))
+ }
+ 
++// OpenaiCodexPoolQuotaErrorEnabled applies equality check predicate on the "openai_codex_pool_quota_error_enabled" field. It's identical to OpenaiCodexPoolQuotaErrorEnabledEQ.
++func OpenaiCodexPoolQuotaErrorEnabled(v bool) predicate.Group {
++	return predicate.Group(sql.FieldEQ(FieldOpenaiCodexPoolQuotaErrorEnabled, v))
++}
++
+ // FreeOpenaiFast applies equality check predicate on the "free_openai_fast" field. It's identical to FreeOpenaiFastEQ.
+ func FreeOpenaiFast(v bool) predicate.Group {
+ 	return predicate.Group(sql.FieldEQ(FieldFreeOpenaiFast, v))
+@@ -2325,6 +2330,16 @@ func ForceOpenaiUltrafastNEQ(v bool) predicate.Group {
+ 	return predicate.Group(sql.FieldNEQ(FieldForceOpenaiUltrafast, v))
+ }
+ 
++// OpenaiCodexPoolQuotaErrorEnabledEQ applies the EQ predicate on the "openai_codex_pool_quota_error_enabled" field.
++func OpenaiCodexPoolQuotaErrorEnabledEQ(v bool) predicate.Group {
++	return predicate.Group(sql.FieldEQ(FieldOpenaiCodexPoolQuotaErrorEnabled, v))
++}
++
++// OpenaiCodexPoolQuotaErrorEnabledNEQ applies the NEQ predicate on the "openai_codex_pool_quota_error_enabled" field.
++func OpenaiCodexPoolQuotaErrorEnabledNEQ(v bool) predicate.Group {
++	return predicate.Group(sql.FieldNEQ(FieldOpenaiCodexPoolQuotaErrorEnabled, v))
++}
++
+ // FreeOpenaiFastEQ applies the EQ predicate on the "free_openai_fast" field.
+ func FreeOpenaiFastEQ(v bool) predicate.Group {
+ 	return predicate.Group(sql.FieldEQ(FieldFreeOpenaiFast, v))
+diff --git a/backend/ent/group_create.go b/backend/ent/group_create.go
+index 29c38e9f3..15f3fdf5f 100644
+--- a/backend/ent/group_create.go
++++ b/backend/ent/group_create.go
+@@ -752,6 +752,20 @@ func (_c *GroupCreate) SetNillableForceOpenaiUltrafast(v *bool) *GroupCreate {
+ 	return _c
+ }
+ 
++// SetOpenaiCodexPoolQuotaErrorEnabled sets the "openai_codex_pool_quota_error_enabled" field.
++func (_c *GroupCreate) SetOpenaiCodexPoolQuotaErrorEnabled(v bool) *GroupCreate {
++	_c.mutation.SetOpenaiCodexPoolQuotaErrorEnabled(v)
++	return _c
++}
++
++// SetNillableOpenaiCodexPoolQuotaErrorEnabled sets the "openai_codex_pool_quota_error_enabled" field if the given value is not nil.
++func (_c *GroupCreate) SetNillableOpenaiCodexPoolQuotaErrorEnabled(v *bool) *GroupCreate {
++	if v != nil {
++		_c.SetOpenaiCodexPoolQuotaErrorEnabled(*v)
++	}
++	return _c
++}
++
+ // SetFreeOpenaiFast sets the "free_openai_fast" field.
+ func (_c *GroupCreate) SetFreeOpenaiFast(v bool) *GroupCreate {
+ 	_c.mutation.SetFreeOpenaiFast(v)
+@@ -1201,6 +1215,10 @@ func (_c *GroupCreate) defaults() error {
+ 		v := group.DefaultForceOpenaiUltrafast
+ 		_c.mutation.SetForceOpenaiUltrafast(v)
+ 	}
++	if _, ok := _c.mutation.OpenaiCodexPoolQuotaErrorEnabled(); !ok {
++		v := group.DefaultOpenaiCodexPoolQuotaErrorEnabled
++		_c.mutation.SetOpenaiCodexPoolQuotaErrorEnabled(v)
++	}
+ 	if _, ok := _c.mutation.FreeOpenaiFast(); !ok {
+ 		v := group.DefaultFreeOpenaiFast
+ 		_c.mutation.SetFreeOpenaiFast(v)
+@@ -1416,6 +1434,9 @@ func (_c *GroupCreate) check() error {
+ 	if _, ok := _c.mutation.ForceOpenaiUltrafast(); !ok {
+ 		return &ValidationError{Name: "force_openai_ultrafast", err: errors.New(`ent: missing required field "Group.force_openai_ultrafast"`)}
+ 	}
++	if _, ok := _c.mutation.OpenaiCodexPoolQuotaErrorEnabled(); !ok {
++		return &ValidationError{Name: "openai_codex_pool_quota_error_enabled", err: errors.New(`ent: missing required field "Group.openai_codex_pool_quota_error_enabled"`)}
++	}
+ 	if _, ok := _c.mutation.FreeOpenaiFast(); !ok {
+ 		return &ValidationError{Name: "free_openai_fast", err: errors.New(`ent: missing required field "Group.free_openai_fast"`)}
+ 	}
+@@ -1720,6 +1741,10 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
+ 		_spec.SetField(group.FieldForceOpenaiUltrafast, field.TypeBool, value)
+ 		_node.ForceOpenaiUltrafast = value
+ 	}
++	if value, ok := _c.mutation.OpenaiCodexPoolQuotaErrorEnabled(); ok {
++		_spec.SetField(group.FieldOpenaiCodexPoolQuotaErrorEnabled, field.TypeBool, value)
++		_node.OpenaiCodexPoolQuotaErrorEnabled = value
++	}
+ 	if value, ok := _c.mutation.FreeOpenaiFast(); ok {
+ 		_spec.SetField(group.FieldFreeOpenaiFast, field.TypeBool, value)
+ 		_node.FreeOpenaiFast = value
+@@ -2838,6 +2863,18 @@ func (u *GroupUpsert) UpdateForceOpenaiUltrafast() *GroupUpsert {
+ 	return u
+ }
+ 
++// SetOpenaiCodexPoolQuotaErrorEnabled sets the "openai_codex_pool_quota_error_enabled" field.
++func (u *GroupUpsert) SetOpenaiCodexPoolQuotaErrorEnabled(v bool) *GroupUpsert {
++	u.Set(group.FieldOpenaiCodexPoolQuotaErrorEnabled, v)
++	return u
++}
++
++// UpdateOpenaiCodexPoolQuotaErrorEnabled sets the "openai_codex_pool_quota_error_enabled" field to the value that was provided on create.
++func (u *GroupUpsert) UpdateOpenaiCodexPoolQuotaErrorEnabled() *GroupUpsert {
++	u.SetExcluded(group.FieldOpenaiCodexPoolQuotaErrorEnabled)
++	return u
++}
++
+ // SetFreeOpenaiFast sets the "free_openai_fast" field.
+ func (u *GroupUpsert) SetFreeOpenaiFast(v bool) *GroupUpsert {
+ 	u.Set(group.FieldFreeOpenaiFast, v)
+@@ -4129,6 +4166,20 @@ func (u *GroupUpsertOne) UpdateForceOpenaiUltrafast() *GroupUpsertOne {
+ 	})
+ }
+ 
++// SetOpenaiCodexPoolQuotaErrorEnabled sets the "openai_codex_pool_quota_error_enabled" field.
++func (u *GroupUpsertOne) SetOpenaiCodexPoolQuotaErrorEnabled(v bool) *GroupUpsertOne {
++	return u.Update(func(s *GroupUpsert) {
++		s.SetOpenaiCodexPoolQuotaErrorEnabled(v)
++	})
++}
++
++// UpdateOpenaiCodexPoolQuotaErrorEnabled sets the "openai_codex_pool_quota_error_enabled" field to the value that was provided on create.
++func (u *GroupUpsertOne) UpdateOpenaiCodexPoolQuotaErrorEnabled() *GroupUpsertOne {
++	return u.Update(func(s *GroupUpsert) {
++		s.UpdateOpenaiCodexPoolQuotaErrorEnabled()
++	})
++}
++
+ // SetFreeOpenaiFast sets the "free_openai_fast" field.
+ func (u *GroupUpsertOne) SetFreeOpenaiFast(v bool) *GroupUpsertOne {
+ 	return u.Update(func(s *GroupUpsert) {
+@@ -5617,6 +5668,20 @@ func (u *GroupUpsertBulk) UpdateForceOpenaiUltrafast() *GroupUpsertBulk {
+ 	})
+ }
+ 
++// SetOpenaiCodexPoolQuotaErrorEnabled sets the "openai_codex_pool_quota_error_enabled" field.
++func (u *GroupUpsertBulk) SetOpenaiCodexPoolQuotaErrorEnabled(v bool) *GroupUpsertBulk {
++	return u.Update(func(s *GroupUpsert) {
++		s.SetOpenaiCodexPoolQuotaErrorEnabled(v)
++	})
++}
++
++// UpdateOpenaiCodexPoolQuotaErrorEnabled sets the "openai_codex_pool_quota_error_enabled" field to the value that was provided on create.
++func (u *GroupUpsertBulk) UpdateOpenaiCodexPoolQuotaErrorEnabled() *GroupUpsertBulk {
++	return u.Update(func(s *GroupUpsert) {
++		s.UpdateOpenaiCodexPoolQuotaErrorEnabled()
++	})
++}
++
+ // SetFreeOpenaiFast sets the "free_openai_fast" field.
+ func (u *GroupUpsertBulk) SetFreeOpenaiFast(v bool) *GroupUpsertBulk {
+ 	return u.Update(func(s *GroupUpsert) {
+diff --git a/backend/ent/group_update.go b/backend/ent/group_update.go
+index 672b07b20..6e89b5766 100644
+--- a/backend/ent/group_update.go
++++ b/backend/ent/group_update.go
+@@ -1037,6 +1037,20 @@ func (_u *GroupUpdate) SetNillableForceOpenaiUltrafast(v *bool) *GroupUpdate {
+ 	return _u
+ }
+ 
++// SetOpenaiCodexPoolQuotaErrorEnabled sets the "openai_codex_pool_quota_error_enabled" field.
++func (_u *GroupUpdate) SetOpenaiCodexPoolQuotaErrorEnabled(v bool) *GroupUpdate {
++	_u.mutation.SetOpenaiCodexPoolQuotaErrorEnabled(v)
++	return _u
++}
++
++// SetNillableOpenaiCodexPoolQuotaErrorEnabled sets the "openai_codex_pool_quota_error_enabled" field if the given value is not nil.
++func (_u *GroupUpdate) SetNillableOpenaiCodexPoolQuotaErrorEnabled(v *bool) *GroupUpdate {
++	if v != nil {
++		_u.SetOpenaiCodexPoolQuotaErrorEnabled(*v)
++	}
++	return _u
++}
++
+ // SetFreeOpenaiFast sets the "free_openai_fast" field.
+ func (_u *GroupUpdate) SetFreeOpenaiFast(v bool) *GroupUpdate {
+ 	_u.mutation.SetFreeOpenaiFast(v)
+@@ -1904,6 +1918,9 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
+ 	if value, ok := _u.mutation.ForceOpenaiUltrafast(); ok {
+ 		_spec.SetField(group.FieldForceOpenaiUltrafast, field.TypeBool, value)
+ 	}
++	if value, ok := _u.mutation.OpenaiCodexPoolQuotaErrorEnabled(); ok {
++		_spec.SetField(group.FieldOpenaiCodexPoolQuotaErrorEnabled, field.TypeBool, value)
++	}
+ 	if value, ok := _u.mutation.FreeOpenaiFast(); ok {
+ 		_spec.SetField(group.FieldFreeOpenaiFast, field.TypeBool, value)
+ 	}
+@@ -3274,6 +3291,20 @@ func (_u *GroupUpdateOne) SetNillableForceOpenaiUltrafast(v *bool) *GroupUpdateO
+ 	return _u
+ }
+ 
++// SetOpenaiCodexPoolQuotaErrorEnabled sets the "openai_codex_pool_quota_error_enabled" field.
++func (_u *GroupUpdateOne) SetOpenaiCodexPoolQuotaErrorEnabled(v bool) *GroupUpdateOne {
++	_u.mutation.SetOpenaiCodexPoolQuotaErrorEnabled(v)
++	return _u
++}
++
++// SetNillableOpenaiCodexPoolQuotaErrorEnabled sets the "openai_codex_pool_quota_error_enabled" field if the given value is not nil.
++func (_u *GroupUpdateOne) SetNillableOpenaiCodexPoolQuotaErrorEnabled(v *bool) *GroupUpdateOne {
++	if v != nil {
++		_u.SetOpenaiCodexPoolQuotaErrorEnabled(*v)
++	}
++	return _u
++}
++
+ // SetFreeOpenaiFast sets the "free_openai_fast" field.
+ func (_u *GroupUpdateOne) SetFreeOpenaiFast(v bool) *GroupUpdateOne {
+ 	_u.mutation.SetFreeOpenaiFast(v)
+@@ -4171,6 +4202,9 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
+ 	if value, ok := _u.mutation.ForceOpenaiUltrafast(); ok {
+ 		_spec.SetField(group.FieldForceOpenaiUltrafast, field.TypeBool, value)
+ 	}
++	if value, ok := _u.mutation.OpenaiCodexPoolQuotaErrorEnabled(); ok {
++		_spec.SetField(group.FieldOpenaiCodexPoolQuotaErrorEnabled, field.TypeBool, value)
++	}
+ 	if value, ok := _u.mutation.FreeOpenaiFast(); ok {
+ 		_spec.SetField(group.FieldFreeOpenaiFast, field.TypeBool, value)
+ 	}
+diff --git a/backend/ent/migrate/schema.go b/backend/ent/migrate/schema.go
+index ede04e823..3769f9f23 100644
+--- a/backend/ent/migrate/schema.go
++++ b/backend/ent/migrate/schema.go
+@@ -958,6 +958,7 @@ var (
+ 		{Name: "allow_live", Type: field.TypeBool, Default: false},
+ 		{Name: "force_openai_fast", Type: field.TypeBool, Default: false},
+ 		{Name: "force_openai_ultrafast", Type: field.TypeBool, Default: false},
++		{Name: "openai_codex_pool_quota_error_enabled", Type: field.TypeBool, Default: false},
+ 		{Name: "free_openai_fast", Type: field.TypeBool, Default: false},
+ 		{Name: "require_oauth_only", Type: field.TypeBool, Default: false},
+ 		{Name: "require_privacy_set", Type: field.TypeBool, Default: false},
+diff --git a/backend/ent/mutation.go b/backend/ent/mutation.go
+index 8ad231e0f..77111e1a0 100644
+--- a/backend/ent/mutation.go
++++ b/backend/ent/mutation.go
+@@ -22162,6 +22162,7 @@ type GroupMutation struct {
+ 	allow_live                              *bool
+ 	force_openai_fast                       *bool
+ 	force_openai_ultrafast                  *bool
++	openai_codex_pool_quota_error_enabled   *bool
+ 	free_openai_fast                        *bool
+ 	require_oauth_only                      *bool
+ 	require_privacy_set                     *bool
+@@ -25095,6 +25096,42 @@ func (m *GroupMutation) ResetForceOpenaiUltrafast() {
+ 	m.force_openai_ultrafast = nil
+ }
+ 
++// SetOpenaiCodexPoolQuotaErrorEnabled sets the "openai_codex_pool_quota_error_enabled" field.
++func (m *GroupMutation) SetOpenaiCodexPoolQuotaErrorEnabled(b bool) {
++	m.openai_codex_pool_quota_error_enabled = &b
++}
++
++// OpenaiCodexPoolQuotaErrorEnabled returns the value of the "openai_codex_pool_quota_error_enabled" field in the mutation.
++func (m *GroupMutation) OpenaiCodexPoolQuotaErrorEnabled() (r bool, exists bool) {
++	v := m.openai_codex_pool_quota_error_enabled
++	if v == nil {
++		return
++	}
++	return *v, true
++}
++
++// OldOpenaiCodexPoolQuotaErrorEnabled returns the old "openai_codex_pool_quota_error_enabled" field's value of the Group entity.
++// If the Group object wasn't provided to the builder, the object is fetched from the database.
++// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
++func (m *GroupMutation) OldOpenaiCodexPoolQuotaErrorEnabled(ctx context.Context) (v bool, err error) {
++	if !m.op.Is(OpUpdateOne) {
++		return v, errors.New("OldOpenaiCodexPoolQuotaErrorEnabled is only allowed on UpdateOne operations")
++	}
++	if m.id == nil || m.oldValue == nil {
++		return v, errors.New("OldOpenaiCodexPoolQuotaErrorEnabled requires an ID field in the mutation")
++	}
++	oldValue, err := m.oldValue(ctx)
++	if err != nil {
++		return v, fmt.Errorf("querying old value for OldOpenaiCodexPoolQuotaErrorEnabled: %w", err)
++	}
++	return oldValue.OpenaiCodexPoolQuotaErrorEnabled, nil
++}
++
++// ResetOpenaiCodexPoolQuotaErrorEnabled resets all changes to the "openai_codex_pool_quota_error_enabled" field.
++func (m *GroupMutation) ResetOpenaiCodexPoolQuotaErrorEnabled() {
++	m.openai_codex_pool_quota_error_enabled = nil
++}
++
+ // SetFreeOpenaiFast sets the "free_openai_fast" field.
+ func (m *GroupMutation) SetFreeOpenaiFast(b bool) {
+ 	m.free_openai_fast = &b
+@@ -26032,7 +26069,7 @@ func (m *GroupMutation) Type() string {
+ // order to get all numeric fields that were incremented/decremented, call
+ // AddedFields().
+ func (m *GroupMutation) Fields() []string {
+-	fields := make([]string, 0, 69)
++	fields := make([]string, 0, 70)
+ 	if m.created_at != nil {
+ 		fields = append(fields, group.FieldCreatedAt)
+ 	}
+@@ -26198,6 +26235,9 @@ func (m *GroupMutation) Fields() []string {
+ 	if m.force_openai_ultrafast != nil {
+ 		fields = append(fields, group.FieldForceOpenaiUltrafast)
+ 	}
++	if m.openai_codex_pool_quota_error_enabled != nil {
++		fields = append(fields, group.FieldOpenaiCodexPoolQuotaErrorEnabled)
++	}
+ 	if m.free_openai_fast != nil {
+ 		fields = append(fields, group.FieldFreeOpenaiFast)
+ 	}
+@@ -26358,6 +26398,8 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
+ 		return m.ForceOpenaiFast()
+ 	case group.FieldForceOpenaiUltrafast:
+ 		return m.ForceOpenaiUltrafast()
++	case group.FieldOpenaiCodexPoolQuotaErrorEnabled:
++		return m.OpenaiCodexPoolQuotaErrorEnabled()
+ 	case group.FieldFreeOpenaiFast:
+ 		return m.FreeOpenaiFast()
+ 	case group.FieldRequireOauthOnly:
+@@ -26505,6 +26547,8 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
+ 		return m.OldForceOpenaiFast(ctx)
+ 	case group.FieldForceOpenaiUltrafast:
+ 		return m.OldForceOpenaiUltrafast(ctx)
++	case group.FieldOpenaiCodexPoolQuotaErrorEnabled:
++		return m.OldOpenaiCodexPoolQuotaErrorEnabled(ctx)
+ 	case group.FieldFreeOpenaiFast:
+ 		return m.OldFreeOpenaiFast(ctx)
+ 	case group.FieldRequireOauthOnly:
+@@ -26927,6 +26971,13 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
+ 		}
+ 		m.SetForceOpenaiUltrafast(v)
+ 		return nil
++	case group.FieldOpenaiCodexPoolQuotaErrorEnabled:
++		v, ok := value.(bool)
++		if !ok {
++			return fmt.Errorf("unexpected type %T for field %s", value, name)
++		}
++		m.SetOpenaiCodexPoolQuotaErrorEnabled(v)
++		return nil
+ 	case group.FieldFreeOpenaiFast:
+ 		v, ok := value.(bool)
+ 		if !ok {
+@@ -27701,6 +27752,9 @@ func (m *GroupMutation) ResetField(name string) error {
+ 	case group.FieldForceOpenaiUltrafast:
+ 		m.ResetForceOpenaiUltrafast()
+ 		return nil
++	case group.FieldOpenaiCodexPoolQuotaErrorEnabled:
++		m.ResetOpenaiCodexPoolQuotaErrorEnabled()
++		return nil
+ 	case group.FieldFreeOpenaiFast:
+ 		m.ResetFreeOpenaiFast()
+ 		return nil
+diff --git a/backend/ent/runtime/runtime.go b/backend/ent/runtime/runtime.go
+index 9541efb6d..f2e350471 100644
+--- a/backend/ent/runtime/runtime.go
++++ b/backend/ent/runtime/runtime.go
+@@ -1187,66 +1187,70 @@ func init() {
+ 	groupDescForceOpenaiUltrafast := groupFields[51].Descriptor()
+ 	// group.DefaultForceOpenaiUltrafast holds the default value on creation for the force_openai_ultrafast field.
+ 	group.DefaultForceOpenaiUltrafast = groupDescForceOpenaiUltrafast.Default.(bool)
++	// groupDescOpenaiCodexPoolQuotaErrorEnabled is the schema descriptor for openai_codex_pool_quota_error_enabled field.
++	groupDescOpenaiCodexPoolQuotaErrorEnabled := groupFields[52].Descriptor()
++	// group.DefaultOpenaiCodexPoolQuotaErrorEnabled holds the default value on creation for the openai_codex_pool_quota_error_enabled field.
++	group.DefaultOpenaiCodexPoolQuotaErrorEnabled = groupDescOpenaiCodexPoolQuotaErrorEnabled.Default.(bool)
+ 	// groupDescFreeOpenaiFast is the schema descriptor for free_openai_fast field.
+-	groupDescFreeOpenaiFast := groupFields[52].Descriptor()
++	groupDescFreeOpenaiFast := groupFields[53].Descriptor()
+ 	// group.DefaultFreeOpenaiFast holds the default value on creation for the free_openai_fast field.
+ 	group.DefaultFreeOpenaiFast = groupDescFreeOpenaiFast.Default.(bool)
+ 	// groupDescRequireOauthOnly is the schema descriptor for require_oauth_only field.
+-	groupDescRequireOauthOnly := groupFields[53].Descriptor()
++	groupDescRequireOauthOnly := groupFields[54].Descriptor()
+ 	// group.DefaultRequireOauthOnly holds the default value on creation for the require_oauth_only field.
+ 	group.DefaultRequireOauthOnly = groupDescRequireOauthOnly.Default.(bool)
+ 	// groupDescRequirePrivacySet is the schema descriptor for require_privacy_set field.
+-	groupDescRequirePrivacySet := groupFields[54].Descriptor()
++	groupDescRequirePrivacySet := groupFields[55].Descriptor()
+ 	// group.DefaultRequirePrivacySet holds the default value on creation for the require_privacy_set field.
+ 	group.DefaultRequirePrivacySet = groupDescRequirePrivacySet.Default.(bool)
+ 	// groupDescDefaultMappedModel is the schema descriptor for default_mapped_model field.
+-	groupDescDefaultMappedModel := groupFields[55].Descriptor()
++	groupDescDefaultMappedModel := groupFields[56].Descriptor()
+ 	// group.DefaultDefaultMappedModel holds the default value on creation for the default_mapped_model field.
+ 	group.DefaultDefaultMappedModel = groupDescDefaultMappedModel.Default.(string)
+ 	// group.DefaultMappedModelValidator is a validator for the "default_mapped_model" field. It is called by the builders before save.
+ 	group.DefaultMappedModelValidator = groupDescDefaultMappedModel.Validators[0].(func(string) error)
+ 	// groupDescMessagesDispatchModelConfig is the schema descriptor for messages_dispatch_model_config field.
+-	groupDescMessagesDispatchModelConfig := groupFields[56].Descriptor()
++	groupDescMessagesDispatchModelConfig := groupFields[57].Descriptor()
+ 	// group.DefaultMessagesDispatchModelConfig holds the default value on creation for the messages_dispatch_model_config field.
+ 	group.DefaultMessagesDispatchModelConfig = groupDescMessagesDispatchModelConfig.Default.(domain.OpenAIMessagesDispatchModelConfig)
+ 	// groupDescModelAllowlist is the schema descriptor for model_allowlist field.
+-	groupDescModelAllowlist := groupFields[57].Descriptor()
++	groupDescModelAllowlist := groupFields[58].Descriptor()
+ 	// group.DefaultModelAllowlist holds the default value on creation for the model_allowlist field.
+ 	group.DefaultModelAllowlist = groupDescModelAllowlist.Default.(domain.GroupModelAllowlist)
+ 	// groupDescCodexModelsManifestConfig is the schema descriptor for codex_models_manifest_config field.
+-	groupDescCodexModelsManifestConfig := groupFields[58].Descriptor()
++	groupDescCodexModelsManifestConfig := groupFields[59].Descriptor()
+ 	// group.DefaultCodexModelsManifestConfig holds the default value on creation for the codex_models_manifest_config field.
+ 	group.DefaultCodexModelsManifestConfig = groupDescCodexModelsManifestConfig.Default.(domain.GroupCodexModelsManifestConfig)
+ 	// groupDescRpmLimit is the schema descriptor for rpm_limit field.
+-	groupDescRpmLimit := groupFields[59].Descriptor()
++	groupDescRpmLimit := groupFields[60].Descriptor()
+ 	// group.DefaultRpmLimit holds the default value on creation for the rpm_limit field.
+ 	group.DefaultRpmLimit = groupDescRpmLimit.Default.(int)
+ 	// groupDescMaxReasoningEffort is the schema descriptor for max_reasoning_effort field.
+-	groupDescMaxReasoningEffort := groupFields[60].Descriptor()
++	groupDescMaxReasoningEffort := groupFields[61].Descriptor()
+ 	// group.DefaultMaxReasoningEffort holds the default value on creation for the max_reasoning_effort field.
+ 	group.DefaultMaxReasoningEffort = groupDescMaxReasoningEffort.Default.(string)
+ 	// group.MaxReasoningEffortValidator is a validator for the "max_reasoning_effort" field. It is called by the builders before save.
+ 	group.MaxReasoningEffortValidator = groupDescMaxReasoningEffort.Validators[0].(func(string) error)
+ 	// groupDescMaxReasoningEffortOverLimit is the schema descriptor for max_reasoning_effort_over_limit field.
+-	groupDescMaxReasoningEffortOverLimit := groupFields[61].Descriptor()
++	groupDescMaxReasoningEffortOverLimit := groupFields[62].Descriptor()
+ 	// group.DefaultMaxReasoningEffortOverLimit holds the default value on creation for the max_reasoning_effort_over_limit field.
+ 	group.DefaultMaxReasoningEffortOverLimit = groupDescMaxReasoningEffortOverLimit.Default.(string)
+ 	// group.MaxReasoningEffortOverLimitValidator is a validator for the "max_reasoning_effort_over_limit" field. It is called by the builders before save.
+ 	group.MaxReasoningEffortOverLimitValidator = groupDescMaxReasoningEffortOverLimit.Validators[0].(func(string) error)
+ 	// groupDescReasoningEffortMappings is the schema descriptor for reasoning_effort_mappings field.
+-	groupDescReasoningEffortMappings := groupFields[62].Descriptor()
++	groupDescReasoningEffortMappings := groupFields[63].Descriptor()
+ 	// group.DefaultReasoningEffortMappings holds the default value on creation for the reasoning_effort_mappings field.
+ 	group.DefaultReasoningEffortMappings = groupDescReasoningEffortMappings.Default.([]domain.ReasoningEffortMapping)
+ 	// groupDescProfitControlEnabled is the schema descriptor for profit_control_enabled field.
+-	groupDescProfitControlEnabled := groupFields[63].Descriptor()
++	groupDescProfitControlEnabled := groupFields[64].Descriptor()
+ 	// group.DefaultProfitControlEnabled holds the default value on creation for the profit_control_enabled field.
+ 	group.DefaultProfitControlEnabled = groupDescProfitControlEnabled.Default.(bool)
+ 	// groupDescProfitMinMargin is the schema descriptor for profit_min_margin field.
+-	groupDescProfitMinMargin := groupFields[64].Descriptor()
++	groupDescProfitMinMargin := groupFields[65].Descriptor()
+ 	// group.DefaultProfitMinMargin holds the default value on creation for the profit_min_margin field.
+ 	group.DefaultProfitMinMargin = groupDescProfitMinMargin.Default.(float64)
+ 	// groupDescProfitSafetyBuffer is the schema descriptor for profit_safety_buffer field.
+-	groupDescProfitSafetyBuffer := groupFields[65].Descriptor()
++	groupDescProfitSafetyBuffer := groupFields[66].Descriptor()
+ 	// group.DefaultProfitSafetyBuffer holds the default value on creation for the profit_safety_buffer field.
+ 	group.DefaultProfitSafetyBuffer = groupDescProfitSafetyBuffer.Default.(float64)
+ 	idempotencyrecordMixin := schema.IdempotencyRecord{}.Mixin()
+diff --git a/backend/ent/schema/group.go b/backend/ent/schema/group.go
+index 5c47e0406..e22700dd6 100644
+--- a/backend/ent/schema/group.go
++++ b/backend/ent/schema/group.go
+@@ -256,6 +256,9 @@ func (Group) Fields() []ent.Field {
+ 		field.Bool("force_openai_ultrafast").
+ 			Default(false).
+ 			Comment("是否对支持 Ultrafast 的模型强制使用 service_tier=ultrafast（优先于 force_openai_fast）"),
++		field.Bool("openai_codex_pool_quota_error_enabled").
++			Default(false).
++			Comment("Return the known Codex quota reset when this group has no available accounts"),
+ 		field.Bool("free_openai_fast").
+ 			Default(false).
+ 			Comment("是否让此 OpenAI/Composite 分组的 Fast 请求按 Standard 价格计费"),
+diff --git a/backend/internal/handler/admin/group_handler.go b/backend/internal/handler/admin/group_handler.go
+index beacae5c0..d59aeb580 100644
+--- a/backend/internal/handler/admin/group_handler.go
++++ b/backend/internal/handler/admin/group_handler.go
+@@ -240,6 +240,7 @@ type CreateGroupRequest struct {
+ 	AllowLive                   bool                                      `json:"allow_live"`
+ 	ForceOpenAIFast             bool                                      `json:"force_openai_fast"`
+ 	ForceOpenAIUltrafast        bool                                      `json:"force_openai_ultrafast"`
++	CodexPoolQuotaErrorEnabled  bool                                      `json:"openai_codex_pool_quota_error_enabled"`
+ 	FreeOpenAIFast              bool                                      `json:"free_openai_fast"`
+ 	RequireOAuthOnly            bool                                      `json:"require_oauth_only"`
+ 	RequirePrivacySet           bool                                      `json:"require_privacy_set"`
+@@ -318,6 +319,7 @@ type UpdateGroupRequest struct {
+ 	AllowLive                   *bool                                      `json:"allow_live"`
+ 	ForceOpenAIFast             *bool                                      `json:"force_openai_fast"`
+ 	ForceOpenAIUltrafast        *bool                                      `json:"force_openai_ultrafast"`
++	CodexPoolQuotaErrorEnabled  *bool                                      `json:"openai_codex_pool_quota_error_enabled"`
+ 	FreeOpenAIFast              *bool                                      `json:"free_openai_fast"`
+ 	RequireOAuthOnly            *bool                                      `json:"require_oauth_only"`
+ 	RequirePrivacySet           *bool                                      `json:"require_privacy_set"`
+@@ -722,6 +724,7 @@ func (h *GroupHandler) Create(c *gin.Context) {
+ 		AllowLive:                       req.AllowLive,
+ 		ForceOpenAIFast:                 req.ForceOpenAIFast,
+ 		ForceOpenAIUltrafast:            req.ForceOpenAIUltrafast,
++		CodexPoolQuotaErrorEnabled:      req.CodexPoolQuotaErrorEnabled,
+ 		FreeOpenAIFast:                  req.FreeOpenAIFast,
+ 		RequireOAuthOnly:                req.RequireOAuthOnly,
+ 		RequirePrivacySet:               req.RequirePrivacySet,
+@@ -871,6 +874,7 @@ func (h *GroupHandler) Update(c *gin.Context) {
+ 		AllowLive:                       req.AllowLive,
+ 		ForceOpenAIFast:                 req.ForceOpenAIFast,
+ 		ForceOpenAIUltrafast:            req.ForceOpenAIUltrafast,
++		CodexPoolQuotaErrorEnabled:      req.CodexPoolQuotaErrorEnabled,
+ 		FreeOpenAIFast:                  req.FreeOpenAIFast,
+ 		RequireOAuthOnly:                req.RequireOAuthOnly,
+ 		RequirePrivacySet:               req.RequirePrivacySet,
+diff --git a/backend/internal/handler/dto/mappers.go b/backend/internal/handler/dto/mappers.go
+index 3adf2e237..4ceecb41a 100644
+--- a/backend/internal/handler/dto/mappers.go
++++ b/backend/internal/handler/dto/mappers.go
+@@ -150,6 +150,7 @@ func GroupFromServiceAdmin(g *service.Group) *AdminGroup {
+ 		Group:                       groupFromServiceBase(g),
+ 		ForceOpenAIFast:             g.ForceOpenAIFast,
+ 		ForceOpenAIUltrafast:        g.ForceOpenAIUltrafast,
++		CodexPoolQuotaErrorEnabled:  g.CodexPoolQuotaErrorEnabled,
+ 		FreeOpenAIFast:              g.FreeOpenAIFast,
+ 		ProfitControlEnabled:        g.ProfitControlEnabled,
+ 		ProfitMinMargin:             g.ProfitMinMargin,
+diff --git a/backend/internal/handler/dto/types.go b/backend/internal/handler/dto/types.go
+index d59be6a85..9f0f183db 100644
+--- a/backend/internal/handler/dto/types.go
++++ b/backend/internal/handler/dto/types.go
+@@ -172,8 +172,9 @@ type Group struct {
+ type AdminGroup struct {
+ 	Group
+ 	// ForceOpenAIFast 是管理端请求策略，用户侧分组 DTO 无需暴露。
+-	ForceOpenAIFast      bool `json:"force_openai_fast"`
+-	ForceOpenAIUltrafast bool `json:"force_openai_ultrafast"`
++	ForceOpenAIFast            bool `json:"force_openai_fast"`
++	ForceOpenAIUltrafast       bool `json:"force_openai_ultrafast"`
++	CodexPoolQuotaErrorEnabled bool `json:"openai_codex_pool_quota_error_enabled"`
+ 	// FreeOpenAIFast 是管理端计费策略，用户侧分组 DTO 无需暴露。
+ 	FreeOpenAIFast bool `json:"free_openai_fast"`
+ 
+diff --git a/backend/internal/handler/openai_codex_pool_quota.go b/backend/internal/handler/openai_codex_pool_quota.go
+new file mode 100644
+index 000000000..b96a464b9
+--- /dev/null
++++ b/backend/internal/handler/openai_codex_pool_quota.go
+@@ -0,0 +1,83 @@
++package handler
++
++import (
++	"context"
++	"encoding/json"
++	"net/http"
++	"strings"
++	"time"
++
++	"github.com/Wei-Shaw/sub2api/internal/service"
++	coderws "github.com/coder/websocket"
++	"github.com/gin-gonic/gin"
++)
++
++const codexPoolQuotaMessage = "The account pool's Codex usage limit has been reached. Try again at the earliest known reset."
++
++func codexPoolQuotaEnabled(key *service.APIKey) bool {
++	return key != nil && key.Group != nil && key.Group.CodexPoolQuotaErrorEnabled
++}
++
++func codexPoolQuotaBody(reset time.Time) gin.H {
++	return gin.H{
++		"type":      "usage_limit_reached",
++		"message":   codexPoolQuotaMessage,
++		"resets_at": reset.Unix(),
++	}
++}
++
++func (h *OpenAIGatewayHandler) writeCodexPoolQuotaHTTP(c *gin.Context, req service.CodexPoolQuotaRequest, failover *service.UpstreamFailoverError) bool {
++	if c.Writer.Written() || service.IsResponseCommitted(c) {
++		return false
++	}
++	reset := h.gatewayService.EarliestCodexPoolQuotaReset(c.Request.Context(), req)
++	if reset.IsZero() {
++		return false
++	}
++	if failover != nil {
++		copyFailoverRetryAfter(c, failover.ResponseHeaders)
++		if h.applyOpenAIFailoverPassthroughRule(c, failover.StatusCode, failover.ResponseBody, false) {
++			return true
++		}
++	}
++
++	markOpsRoutingCapacityLimited(c)
++	headers := c.Writer.Header()
++	headers.Set("Content-Type", "application/json; charset=utf-8")
++	headers.Set("Cache-Control", "no-store")
++	// An upstream SSE attempt may already have staged its account headers.
++	for key := range headers {
++		name := strings.ToLower(key)
++		switch {
++		case name == "content-length", name == "retry-after", name == "x-accel-buffering",
++			strings.HasPrefix(name, "x-codex-"), strings.HasPrefix(name, "x-ratelimit-"),
++			strings.HasPrefix(name, "x-rate-limit-"), name == "ratelimit", strings.HasPrefix(name, "ratelimit-"):
++			delete(headers, key)
++		}
++	}
++	c.JSON(http.StatusTooManyRequests, gin.H{"error": codexPoolQuotaBody(reset)})
++	return true
++}
++
++func (h *OpenAIGatewayHandler) writeCodexPoolQuotaWS(ctx context.Context, c *gin.Context, conn *coderws.Conn, req service.CodexPoolQuotaRequest) bool {
++	reset := h.gatewayService.EarliestCodexPoolQuotaReset(ctx, req)
++	if reset.IsZero() {
++		return false
++	}
++	payload, err := json.Marshal(gin.H{
++		"type":   "error",
++		"status": http.StatusTooManyRequests,
++		"error":  codexPoolQuotaBody(reset),
++	})
++	if err != nil {
++		return false
++	}
++	writeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
++	defer cancel()
++	if err := conn.Write(writeCtx, coderws.MessageText, payload); err != nil {
++		return false
++	}
++	markOpsRoutingCapacityLimited(c)
++	service.MarkOpsStreamError(c, "usage_limit_reached", codexPoolQuotaMessage, http.StatusTooManyRequests)
++	return true
++}
+diff --git a/backend/internal/handler/openai_codex_pool_quota_test.go b/backend/internal/handler/openai_codex_pool_quota_test.go
+new file mode 100644
+index 000000000..5281ea13d
+--- /dev/null
++++ b/backend/internal/handler/openai_codex_pool_quota_test.go
+@@ -0,0 +1,576 @@
++package handler
++
++import (
++	"context"
++	"fmt"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"os/exec"
++	"strings"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/Wei-Shaw/sub2api/internal/config"
++	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
++	"github.com/Wei-Shaw/sub2api/internal/service"
++	coderws "github.com/coder/websocket"
++	"github.com/gin-gonic/gin"
++	"github.com/stretchr/testify/require"
++	"github.com/tidwall/gjson"
++)
++
++type codexQuotaHandlerRepo struct {
++	service.AccountRepository
++	mu         sync.Mutex
++	candidates []service.Account
++}
++
++func (r *codexQuotaHandlerRepo) ListModelAvailabilityCandidates(context.Context, *int64, []string, bool) ([]service.Account, error) {
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	return append([]service.Account(nil), r.candidates...), nil
++}
++
++func (r *codexQuotaHandlerRepo) ListSchedulableByPlatform(context.Context, string) ([]service.Account, error) {
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	var accounts []service.Account
++	for _, account := range r.candidates {
++		if account.IsSchedulable() {
++			accounts = append(accounts, account)
++		}
++	}
++	return accounts, nil
++}
++
++func (r *codexQuotaHandlerRepo) GetByID(_ context.Context, id int64) (*service.Account, error) {
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	for _, account := range r.candidates {
++		if account.ID == id {
++			return &account, nil
++		}
++	}
++	return nil, nil
++}
++
++func (r *codexQuotaHandlerRepo) SetCodexQuotaRateLimited(_ context.Context, id int64, cooldown, reset time.Time, explicit bool) error {
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	for i := range r.candidates {
++		account := &r.candidates[i]
++		if account.ID == id {
++			now := time.Now()
++			account.RateLimitedAt, account.RateLimitResetAt = &now, &cooldown
++			account.Extra[service.OpenAICodexQuotaCooldownExtraKey] = map[string]any{
++				"limited_at": now.Format(time.RFC3339Nano), "cooldown_until": cooldown.Format(time.RFC3339Nano),
++				"reset_at": reset.Format(time.RFC3339Nano), "explicit": explicit,
++			}
++		}
++	}
++	return nil
++}
++
++type codexQuotaHTTPUpstream struct {
++	service.HTTPUpstream
++	reset            time.Time
++	calls            atomic.Int32
++	successfulFirst  atomic.Bool
++	streamingFailure bool
++}
++
++func (u *codexQuotaHTTPUpstream) Do(_ *http.Request, _ string, id int64, _ int) (*http.Response, error) {
++	if u.calls.Add(1) == 1 && u.successfulFirst.Load() {
++		return &http.Response{
++			StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}},
++			Body: io.NopCloser(strings.NewReader(`data: {"type":"response.completed","response":{"id":"resp_quota_test","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}` + "\n\n")),
++		}, nil
++	}
++	reset := u.reset.Add(time.Duration(id-1) * time.Hour)
++	if u.streamingFailure {
++		return &http.Response{
++			StatusCode: http.StatusOK,
++			Header: http.Header{
++				"Content-Type":                          {"text/event-stream"},
++				"X-Codex-Primary-Used-Percent":          {"100"},
++				"X-Codex-Secondary-Used-Percent":        {"92"},
++				"X-Codex-Primary-Reset-After-Seconds":   {"3600"},
++				"X-Codex-Secondary-Reset-After-Seconds": {"7200"},
++				"X-Codex-Turn-State":                    {"upstream-turn-state"},
++				"X-Ratelimit-Remaining-Requests":        {"0"},
++				"X-Ratelimit-Reset-Requests":            {"60s"},
++				"Retry-After":                           {"60"},
++				"X-Request-Id":                          {"upstream-request"},
++			},
++			Body: io.NopCloser(strings.NewReader(fmt.Sprintf(`data: {"type":"response.failed","response":{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","resets_at":%d}}}`, reset.Unix()) + "\n\n")),
++		}, nil
++	}
++	return &http.Response{
++		StatusCode: http.StatusTooManyRequests, Header: http.Header{"Content-Type": {"application/json"}},
++		Body: io.NopCloser(strings.NewReader(fmt.Sprintf(`{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","resets_at":%d}}`, reset.Unix()))),
++	}, nil
++}
++
++func TestCodexPoolQuotaResponses(t *testing.T) {
++	gin.SetMode(gin.TestMode)
++	now := time.Now().UTC().Truncate(time.Second)
++	reset := now.Add(time.Hour)
++	for _, enabled := range []bool{false, true} {
++		name := "disabled"
++		if enabled {
++			name = "enabled"
++		}
++		t.Run(name, func(t *testing.T) {
++			cfg := &config.Config{RunMode: config.RunModeSimple}
++			cfg.Default.RateMultiplier = 1
++			cfg.Gateway.OpenAIWS.Enabled = true
++			cfg.Gateway.OpenAIWS.OAuthEnabled = true
++			cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
++			cfg.Gateway.OpenAIWS.ModeRouterV2Enabled = true
++			cfg.Gateway.OpenAIWS.IngressModeDefault = service.OpenAIWSIngressModePassthrough
++			repo := &codexQuotaHandlerRepo{candidates: []service.Account{{
++				ID: 1, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Status: service.StatusActive, Schedulable: true,
++				Extra: map[string]any{
++					"openai_oauth_responses_websockets_v2_mode": service.OpenAIWSIngressModePassthrough,
++					"auto_pause_5h_threshold":                   1.0,
++					"codex_usage_updated_at":                    now.Format(time.RFC3339),
++					"codex_5h_used_percent":                     100.0,
++					"codex_5h_reset_at":                         reset.Format(time.RFC3339),
++				},
++			}}}
++			billing := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
++			t.Cleanup(billing.Stop)
++			upstream := &codexQuotaHTTPUpstream{reset: reset, streamingFailure: true}
++			rateLimit := service.NewRateLimitService(repo, nil, cfg, nil, nil)
++			gateway := service.NewOpenAIGatewayService(repo, nil, nil, nil, nil, nil, nil, cfg, nil, nil,
++				service.NewBillingService(cfg, nil), rateLimit, billing, upstream, &service.DeferredService{}, nil, nil, nil, nil, nil, nil, nil)
++			cache := &concurrencyCacheMock{
++				acquireUserSlotFn:    func(context.Context, int64, int, string) (bool, error) { return true, nil },
++				acquireAccountSlotFn: func(context.Context, int64, int, string) (bool, error) { return true, nil },
++			}
++			h := NewOpenAIGatewayHandler(gateway, service.NewConcurrencyService(cache), billing,
++				service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg), nil, nil, nil, nil, cfg)
++			groupID := int64(42)
++			key := &service.APIKey{ID: 7, GroupID: &groupID, User: &service.User{ID: 8, Status: service.StatusActive},
++				Group: &service.Group{ID: groupID, Status: service.StatusActive, Platform: service.PlatformOpenAI, AllowImageGeneration: true, CodexPoolQuotaErrorEnabled: enabled}}
++			newRouter := func(h *OpenAIGatewayHandler) *gin.Engine {
++				router := gin.New()
++				router.Use(func(c *gin.Context) {
++					c.Set(string(middleware.ContextKeyAPIKey), key)
++					c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 8, Concurrency: 1})
++				})
++				router.POST("/v1/responses", h.Responses)
++				router.GET("/v1/responses", h.ResponsesWebSocket)
++				return router
++			}
++			router := newRouter(h)
++			srv := httptest.NewServer(router)
++			defer srv.Close()
++
++			for range 2 {
++				rec := httptest.NewRecorder()
++				req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.1","input":"hello","stream":true}`))
++				req.Header.Set("Content-Type", "application/json")
++				router.ServeHTTP(rec, req)
++				if enabled {
++					require.Equal(t, http.StatusTooManyRequests, rec.Code, rec.Body.String())
++					require.Equal(t, "usage_limit_reached", gjson.GetBytes(rec.Body.Bytes(), "error.type").String())
++					require.Equal(t, reset.Unix(), gjson.GetBytes(rec.Body.Bytes(), "error.resets_at").Int())
++					require.Empty(t, rec.Header().Get("Retry-After"))
++				} else {
++					require.Equal(t, http.StatusServiceUnavailable, rec.Code, rec.Body.String())
++					require.False(t, gjson.GetBytes(rec.Body.Bytes(), "error.resets_at").Exists())
++				}
++			}
++
++			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++			defer cancel()
++			conn, _, err := coderws.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+"/v1/responses", nil)
++			require.NoError(t, err)
++			defer func() { _ = conn.CloseNow() }()
++			require.NoError(t, conn.Write(ctx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.1","input":[{"role":"user","content":"hello"}]}`)))
++			_, payload, err := conn.Read(ctx)
++			if enabled {
++				require.NoError(t, err)
++				require.Equal(t, "error", gjson.GetBytes(payload, "type").String())
++				require.Equal(t, int64(429), gjson.GetBytes(payload, "status").Int())
++				require.Equal(t, "usage_limit_reached", gjson.GetBytes(payload, "error.type").String())
++				require.Equal(t, reset.Unix(), gjson.GetBytes(payload, "error.resets_at").Int())
++				_, _, err = conn.Read(ctx)
++				require.Equal(t, coderws.StatusNormalClosure, coderws.CloseStatus(err))
++			} else {
++				require.Equal(t, coderws.StatusTryAgainLater, coderws.CloseStatus(err))
++			}
++
++			if binary := os.Getenv("CODEX_POOL_QUOTA_TEST_CLI"); enabled && binary != "" {
++				for _, transport := range []string{"false", "true"} {
++					t.Run("codex_ws_"+transport, func(t *testing.T) {
++						dir := t.TempDir()
++						ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
++						defer cancel()
++						cmd := exec.CommandContext(ctx, binary, "exec", "--json", "--skip-git-repo-check", "--ephemeral", // #nosec G702 -- The test operator selects the local CLI executable.
++							"-c", `model_provider="quota_test"`, "-c", `model="gpt-6.1-sol"`,
++							"-c", `model_providers.quota_test.name="Quota test"`,
++							"-c", `model_providers.quota_test.env_key="POOL_TEST_KEY"`,
++							"-c", `model_providers.quota_test.wire_api="responses"`,
++							"-c", `model_providers.quota_test.base_url="`+srv.URL+`/v1"`,
++							"-c", "model_providers.quota_test.supports_websockets="+transport, "Reply with OK.")
++						cmd.Dir = dir
++						cmd.Env = []string{"HOME=" + dir, "CODEX_HOME=" + dir, "POOL_TEST_KEY=local-test", "TZ=UTC", "PATH=" + os.Getenv("PATH")}
++						output, err := cmd.CombinedOutput()
++						require.IsType(t, &exec.ExitError{}, err, string(output))
++						require.Contains(t, string(output), "Try again at "+reset.Format("3:04 PM"))
++					})
++				}
++			}
++
++			if enabled {
++				t.Run("explicit_image_size", func(t *testing.T) {
++					repo.mu.Lock()
++					limited := repo.candidates[0]
++					limited.Extra[service.AccountExtraOpenAIImageSizeTiers] = []string{"4K"}
++					repo.candidates = []service.Account{
++						limited,
++						{ID: 2, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Status: service.StatusActive, Schedulable: true,
++							Extra: map[string]any{service.AccountExtraOpenAIImageSizeTiers: []string{"1K"}}},
++					}
++					repo.mu.Unlock()
++					req := httptest.NewRequest(http.MethodPost, "/v1/responses",
++						strings.NewReader(`{"model":"gpt-5.1","input":"draw a cat","tools":[{"type":"image_generation","size":"3840x2160"}]}`))
++					req.Header.Set("Content-Type", "application/json")
++					rec := httptest.NewRecorder()
++					router.ServeHTTP(rec, req)
++					require.Equal(t, http.StatusTooManyRequests, rec.Code, rec.Body.String())
++					require.Equal(t, reset.Unix(), gjson.GetBytes(rec.Body.Bytes(), "error.resets_at").Int())
++					require.Zero(t, upstream.calls.Load())
++				})
++			}
++
++			if enabled {
++				repo.mu.Lock()
++				repo.candidates = []service.Account{
++					{ID: 1, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Status: service.StatusActive, Schedulable: true, Concurrency: 1,
++						Credentials: map[string]any{"access_token": "mock-token"}, Extra: map[string]any{"openai_passthrough": true}},
++					{ID: 2, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Status: service.StatusActive, Schedulable: true, Concurrency: 1,
++						Credentials: map[string]any{"access_token": "mock-token"}, Extra: map[string]any{"openai_passthrough": true}},
++				}
++				repo.mu.Unlock()
++				for attempt := range 2 {
++					req := httptest.NewRequest(http.MethodPost, "/v1/responses",
++						strings.NewReader(`{"model":"gpt-5.1","instructions":"Be helpful.","input":[{"role":"user","content":"hello"}],"stream":true}`))
++					req.Header.Set("Content-Type", "application/json")
++					rec := httptest.NewRecorder()
++					router.ServeHTTP(rec, req)
++					require.Equal(t, http.StatusTooManyRequests, rec.Code, rec.Body.String())
++					require.Equal(t, reset.Unix(), gjson.GetBytes(rec.Body.Bytes(), "error.resets_at").Int(), rec.Body.String())
++					require.Equal(t, int32(2), upstream.calls.Load())
++					for _, id := range []int64{1, 2} {
++						account, err := repo.GetByID(req.Context(), id)
++						require.NoError(t, err)
++						require.NotNil(t, account.RateLimitResetAt)
++						require.Equal(t, reset.Add(time.Duration(id-1)*time.Hour), account.RateLimitResetAt.UTC())
++					}
++					headers := rec.Result().Header
++					require.Equal(t, "application/json; charset=utf-8", headers.Get("Content-Type"))
++					require.Equal(t, "no-store", headers.Get("Cache-Control"))
++					if attempt == 0 {
++						require.Equal(t, "upstream-request", headers.Get("X-Request-Id"), "the SSE attempt staged upstream headers")
++					}
++					for _, name := range []string{
++						"X-Codex-Primary-Used-Percent", "X-Codex-Secondary-Used-Percent",
++						"X-Codex-Primary-Reset-After-Seconds", "X-Codex-Secondary-Reset-After-Seconds",
++						"X-Codex-Turn-State", "X-Ratelimit-Remaining-Requests", "X-Ratelimit-Reset-Requests",
++						"Retry-After", "X-Accel-Buffering",
++					} {
++						require.Empty(t, headers.Values(name), "%s leaked into pool quota response", name)
++					}
++				}
++			}
++
++			if enabled {
++				for _, tc := range []struct {
++					name  string
++					model string
++				}{
++					{name: "same_model", model: "gpt-5.1"},
++					{name: "changed_model", model: "gpt-5.2"},
++				} {
++					t.Run("http_bridge_"+tc.name, func(t *testing.T) {
++						repo.mu.Lock()
++						repo.candidates = []service.Account{{
++							ID: 1, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Status: service.StatusActive, Schedulable: true, Concurrency: 1,
++							Credentials: map[string]any{"access_token": "mock-token"},
++							Extra:       map[string]any{"openai_oauth_responses_websockets_v2_mode": service.OpenAIWSIngressModeHTTPBridge},
++						}}
++						repo.mu.Unlock()
++						// Use a fresh gateway so runtime cooldowns from other cases do not carry over.
++						upstream := &codexQuotaHTTPUpstream{reset: reset}
++						upstream.successfulFirst.Store(true)
++						bridgeHandler := *h
++						gateway := service.NewOpenAIGatewayService(repo, nil, nil, nil, nil, nil, nil, cfg, nil, nil,
++							service.NewBillingService(cfg, nil), rateLimit, billing, upstream, &service.DeferredService{}, nil, nil, nil, nil, nil, nil, nil)
++						bridgeHandler.gatewayService = gateway
++						router := newRouter(&bridgeHandler)
++						bridgeServer := httptest.NewServer(router)
++						defer bridgeServer.Close()
++						turnCtx, cancelTurns := context.WithTimeout(context.Background(), 5*time.Second)
++						defer cancelTurns()
++						bridge, _, err := coderws.Dial(turnCtx, "ws"+strings.TrimPrefix(bridgeServer.URL, "http")+"/v1/responses", nil)
++						require.NoError(t, err)
++						defer func() { _ = bridge.CloseNow() }()
++						request := `{"type":"response.create","model":"%s","instructions":"Be helpful.","input":[{"type":"message","role":"user","content":"hello"}]}`
++						require.NoError(t, bridge.Write(turnCtx, coderws.MessageText, []byte(fmt.Sprintf(request, "gpt-5.1"))))
++						_, frame, err := bridge.Read(turnCtx)
++						require.NoError(t, err)
++						require.Equal(t, "response.completed", gjson.GetBytes(frame, "type").String(), string(frame))
++						require.NoError(t, bridge.Write(turnCtx, coderws.MessageText, []byte(fmt.Sprintf(request, tc.model))))
++						_, frame, err = bridge.Read(turnCtx)
++						require.Equal(t, int32(2), upstream.calls.Load())
++						if tc.model != "gpt-5.1" {
++							require.Equal(t, coderws.StatusTryAgainLater, coderws.CloseStatus(err), string(frame))
++							return
++						}
++						require.NoError(t, err)
++						require.Equal(t, int64(429), gjson.GetBytes(frame, "status").Int(), string(frame))
++						require.Equal(t, reset.Unix(), gjson.GetBytes(frame, "error.resets_at").Int())
++						_, _, err = bridge.Read(turnCtx)
++						require.Equal(t, coderws.StatusNormalClosure, coderws.CloseStatus(err))
++
++						const responseID = "resp_quota_test"
++						require.Equal(t, reset, gateway.EarliestCodexPoolQuotaReset(turnCtx, service.CodexPoolQuotaRequest{
++							GroupID: &groupID, Model: tc.model, PreviousResponseID: responseID, Transport: service.OpenAIUpstreamTransportAny,
++						}).UTC(), "the OAuth account is bound to this response and has a known quota reset")
++						require.NoError(t, gateway.BindOpenAIHTTPResponseOwner(turnCtx, groupID, responseID, key.User.ID, key.ID))
++						rec := httptest.NewRecorder()
++						req := httptest.NewRequest(http.MethodPost, "/v1/responses",
++							strings.NewReader(`{"model":"gpt-5.1","previous_response_id":"resp_quota_test","input":"continue","stream":true}`))
++						req.Header.Set("Content-Type", "application/json")
++						router.ServeHTTP(rec, req)
++						require.Equal(t, http.StatusServiceUnavailable, rec.Code, rec.Body.String())
++						require.False(t, gjson.GetBytes(rec.Body.Bytes(), "error.resets_at").Exists())
++						require.Equal(t, int32(2), upstream.calls.Load())
++					})
++				}
++			}
++
++		})
++	}
++}
++
++type codexQuotaLiveKeyRepo struct {
++	service.APIKeyRepository
++	key     *service.APIKey
++	enabled atomic.Bool
++}
++
++func (r *codexQuotaLiveKeyRepo) GetByKeyForAuth(context.Context, string) (*service.APIKey, error) {
++	key := *r.key
++	group := *key.Group
++	group.CodexPoolQuotaErrorEnabled = r.enabled.Load()
++	key.Group = &group
++	return &key, nil
++}
++
++func (r *codexQuotaHandlerRepo) SetRateLimited(_ context.Context, id int64, until time.Time) error {
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	for i := range r.candidates {
++		if r.candidates[i].ID == id {
++			r.candidates[i].RateLimitResetAt = &until
++		}
++	}
++	return nil
++}
++
++func TestCodexPoolQuotaNativeWebSocketRefreshesSettingsAfterMetadata(t *testing.T) {
++	gin.SetMode(gin.TestMode)
++	for _, mode := range []string{service.OpenAIWSIngressModeCtxPool, service.OpenAIWSIngressModePassthrough} {
++		for _, scenario := range []struct {
++			name                                   string
++			initiallyEnabled, laterEnabled, output bool
++			healthyBackup, toolContinuation        bool
++			nestedFailure, firstTurn               bool
++		}{
++			{name: "enable_on_existing_connection", laterEnabled: true},
++			{name: "disable_on_existing_connection", initiallyEnabled: true},
++			{name: "preserve_error_after_semantic_output", initiallyEnabled: true, laterEnabled: true, output: true},
++			{name: "reconnect_when_backup_is_healthy", laterEnabled: true, healthyBackup: true},
++			{name: "reconnect_when_tool_turn_depends_on_upstream_state", laterEnabled: true, toolContinuation: true},
++			{name: "diagnose_response_failed", laterEnabled: true, nestedFailure: true},
++			{name: "diagnose_response_failed_on_first_turn", initiallyEnabled: true, nestedFailure: true, firstTurn: true},
++			{name: "forward_response_failed_when_disabled", initiallyEnabled: true, nestedFailure: true},
++			{name: "preserve_response_failed_after_semantic_output", initiallyEnabled: true, laterEnabled: true, output: true, nestedFailure: true},
++		} {
++			t.Run(mode+"/"+scenario.name, func(t *testing.T) {
++				ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
++				defer cancel()
++				now := time.Now().UTC().Truncate(time.Second)
++				reset := now.Add(2 * time.Hour)
++				upstreamReset := reset.Add(time.Hour)
++				var upstreamRequests atomic.Int32
++				var inferredContinuation atomic.Bool
++				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++					conn, err := coderws.Accept(w, r, &coderws.AcceptOptions{CompressionMode: coderws.CompressionContextTakeover})
++					if err != nil {
++						return
++					}
++					defer func() { _ = conn.CloseNow() }()
++					turnFrames := [][]string{
++						{`{"type":"response.completed","response":{"id":"resp_first","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`},
++						{`{"type":"codex.rate_limits"}`, `{"type":"response.created","response":{"id":"resp_second","model":"gpt-5.1"}}`},
++					}
++					if scenario.firstTurn {
++						turnFrames = [][]string{nil}
++					}
++					for _, frames := range turnFrames {
++						_, request, err := conn.Read(ctx)
++						if err != nil {
++							return
++						}
++						if upstreamRequests.Add(1) == 2 {
++							inferredContinuation.Store(gjson.GetBytes(request, "previous_response_id").String() == "resp_first")
++						}
++						for _, frame := range frames {
++							if err := conn.Write(ctx, coderws.MessageText, []byte(frame)); err != nil {
++								return
++							}
++						}
++					}
++					if scenario.output {
++						if err := conn.Write(ctx, coderws.MessageText, []byte(`{"type":"response.output_text.delta","response_id":"resp_second","delta":"hello"}`)); err != nil {
++							return
++						}
++					}
++					upstreamError := fmt.Sprintf(`{"type":"usage_limit_reached","message":"The usage limit has been reached","resets_at":%d}`, upstreamReset.Unix())
++					failureFrame := `{"type":"error","status":429,"error":` + upstreamError + `}`
++					if scenario.nestedFailure {
++						failureFrame = `{"type":"response.failed","response":{"id":"resp_second","error":` + upstreamError + `}}`
++					}
++					_ = conn.Write(ctx, coderws.MessageText, []byte(failureFrame))
++					_, _, _ = conn.Read(ctx)
++				}))
++				defer upstream.Close()
++				repo := &codexQuotaHandlerRepo{candidates: []service.Account{
++					{
++						ID: 1, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey,
++						Status: service.StatusActive, Schedulable: true, Concurrency: 1,
++						Credentials: map[string]any{"api_key": "mock-token", "base_url": upstream.URL},
++						Extra:       map[string]any{"openai_apikey_responses_websockets_v2_mode": mode},
++					},
++					{
++						ID: 2, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth,
++						Status: service.StatusActive, Schedulable: true, Concurrency: 1, RateLimitedAt: &now, RateLimitResetAt: &reset,
++						Extra: map[string]any{
++							"openai_oauth_responses_websockets_v2_mode": mode,
++							service.OpenAICodexQuotaCooldownExtraKey: map[string]any{
++								"limited_at": now.Format(time.RFC3339Nano), "cooldown_until": reset.Format(time.RFC3339Nano),
++								"reset_at": reset.Format(time.RFC3339Nano), "explicit": true,
++							},
++						},
++					},
++				}}
++				if scenario.healthyBackup {
++					repo.candidates[1].RateLimitedAt = nil
++					repo.candidates[1].RateLimitResetAt = nil
++					repo.candidates[1].Priority = 10
++				}
++				cfg := &config.Config{RunMode: config.RunModeSimple}
++				cfg.Security.URLAllowlist.AllowInsecureHTTP = true
++				cfg.Gateway.OpenAIWS.Enabled = true
++				cfg.Gateway.OpenAIWS.OAuthEnabled = true
++				cfg.Gateway.OpenAIWS.APIKeyEnabled = true
++				cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
++				cfg.Gateway.OpenAIWS.ModeRouterV2Enabled = true
++				cfg.Gateway.OpenAIWS.DialTimeoutSeconds = 3
++				cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 5
++				cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 3
++				billing := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
++				t.Cleanup(billing.Stop)
++				rateLimit := service.NewRateLimitService(repo, nil, cfg, nil, nil)
++				gateway := service.NewOpenAIGatewayService(repo, nil, nil, nil, nil, nil, nil, cfg, nil, nil,
++					service.NewBillingService(cfg, nil), rateLimit, billing, nil, &service.DeferredService{}, nil, nil, nil, nil, nil, nil, nil)
++				groupID := int64(42)
++				key := &service.APIKey{ID: 7, Key: "test-gateway-key", GroupID: &groupID, User: &service.User{ID: 8, Status: service.StatusActive},
++					Group: &service.Group{ID: groupID, Status: service.StatusActive, Platform: service.PlatformOpenAI, CodexPoolQuotaErrorEnabled: scenario.initiallyEnabled}}
++				keys := &codexQuotaLiveKeyRepo{key: key}
++				keys.enabled.Store(scenario.initiallyEnabled)
++				cache := &concurrencyCacheMock{
++					acquireUserSlotFn:    func(context.Context, int64, int, string) (bool, error) { return true, nil },
++					acquireAccountSlotFn: func(context.Context, int64, int, string) (bool, error) { return true, nil },
++				}
++				h := NewOpenAIGatewayHandler(gateway, service.NewConcurrencyService(cache), billing,
++					service.NewAPIKeyService(keys, nil, nil, nil, nil, nil, cfg), nil, nil, nil, nil, cfg)
++				router := gin.New()
++				router.GET("/v1/responses", func(c *gin.Context) {
++					c.Set(string(middleware.ContextKeyAPIKey), key)
++					c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 8, Concurrency: 1})
++					h.ResponsesWebSocket(c)
++				})
++				srv := httptest.NewServer(router)
++				defer srv.Close()
++				conn, _, err := coderws.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+"/v1/responses", nil)
++				require.NoError(t, err)
++				defer func() { _ = conn.CloseNow() }()
++				request := []byte(`{"type":"response.create","model":"gpt-5.1","store":false,"input":[{"type":"message","role":"user","content":"hello"}]}`)
++				require.NoError(t, conn.Write(ctx, coderws.MessageText, request))
++				_, frame, err := conn.Read(ctx)
++				require.NoError(t, err)
++				if scenario.firstTurn {
++					require.Equal(t, "error", gjson.GetBytes(frame, "type").String(), string(frame))
++					require.Equal(t, int64(429), gjson.GetBytes(frame, "status").Int(), string(frame))
++					require.Equal(t, reset.Unix(), gjson.GetBytes(frame, "error.resets_at").Int(), string(frame))
++					_, _, err := conn.Read(ctx)
++					require.Equal(t, coderws.StatusNormalClosure, coderws.CloseStatus(err))
++					require.Equal(t, int32(1), upstreamRequests.Load())
++					return
++				}
++				require.Equal(t, "response.completed", gjson.GetBytes(frame, "type").String())
++				keys.enabled.Store(scenario.laterEnabled)
++				if scenario.toolContinuation {
++					request = []byte(`{"type":"response.create","model":"gpt-5.1","store":false,"input":[{"type":"function_call_output","call_id":"call_tool","output":"ok"}]}`)
++				}
++				require.NoError(t, conn.Write(ctx, coderws.MessageText, request))
++				events := []string{"codex.rate_limits", "response.created"}
++				if scenario.output {
++					events = append(events, "response.output_text.delta")
++				}
++				expectReconnect := scenario.healthyBackup || scenario.toolContinuation
++				expectPoolQuota := scenario.laterEnabled && !scenario.output && !expectReconnect
++				errorPath := "error"
++				if !expectReconnect {
++					if scenario.nestedFailure && !expectPoolQuota {
++						events = append(events, "response.failed")
++						errorPath = "response.error"
++					} else {
++						events = append(events, "error")
++					}
++				}
++				for _, event := range events {
++					_, frame, err = conn.Read(ctx)
++					require.NoError(t, err)
++					require.Equal(t, event, gjson.GetBytes(frame, "type").String())
++				}
++				if expectReconnect {
++					_, frame, err = conn.Read(ctx)
++					require.Equal(t, coderws.StatusTryAgainLater, coderws.CloseStatus(err), string(frame))
++					if scenario.toolContinuation && mode == service.OpenAIWSIngressModeCtxPool {
++						require.True(t, inferredContinuation.Load(), "ctx_pool must test the inferred continuation")
++					}
++				} else if expectPoolQuota {
++					require.Equal(t, int64(429), gjson.GetBytes(frame, "status").Int(), string(frame))
++					require.Equal(t, "usage_limit_reached", gjson.GetBytes(frame, "error.type").String(), string(frame))
++					require.Equal(t, reset.Unix(), gjson.GetBytes(frame, "error.resets_at").Int())
++					_, _, err := conn.Read(ctx)
++					require.Equal(t, coderws.StatusNormalClosure, coderws.CloseStatus(err))
++				} else {
++					require.Equal(t, upstreamReset.Unix(), gjson.GetBytes(frame, errorPath+".resets_at").Int(), string(frame))
++				}
++				require.Equal(t, int32(2), upstreamRequests.Load(), "metadata must not permit replay")
++			})
++		}
++	}
++}
+diff --git a/backend/internal/handler/openai_gateway_handler.go b/backend/internal/handler/openai_gateway_handler.go
+index 68a2f51ab..01925532f 100644
+--- a/backend/internal/handler/openai_gateway_handler.go
++++ b/backend/internal/handler/openai_gateway_handler.go
+@@ -461,6 +461,13 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
+ 	// body-signal compact：上游 unary 等待期间向下游发 SSE 注释行心跳，防止
+ 	// 反向代理空闲超时掐断长压缩连接（#3887）。首拍延迟一个心跳间隔，快速
+ 	// 失败仍走 JSON+状态码链路；未标记客户端流式或间隔为 0 时是 no-op。
++	// HTTP continuations can only use API-key accounts.
++	poolQuotaHTTP := codexPoolQuotaEnabled(apiKey) && isBareOpenAIResponsesPath(c) &&
++		openAICompatibleRequestPlatform(c.Request.Context(), apiKey) == service.PlatformOpenAI &&
++		strings.TrimSpace(gjson.GetBytes(body, "previous_response_id").String()) == ""
++	if poolQuotaHTTP {
++		c.Request = c.Request.WithContext(service.WithCodexPoolQuotaHTTP(c.Request.Context()))
++	}
+ 	stopCompactKeepalive := service.StartOpenAICompactSSEKeepalive(c, h.openAICompactKeepaliveInterval())
+ 	defer stopCompactKeepalive()
+ 
+@@ -611,7 +618,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
+ 	service.SetOpsLatencyMs(c, service.OpsAuthLatencyMsKey, time.Since(requestStart).Milliseconds())
+ 	routingStart := time.Now()
+ 
+-	userReleaseFunc, acquired := h.acquireResponsesUserSlot(c, subject.UserID, subject.Concurrency, reqStream, &streamStarted, reqLog)
++	userReleaseFunc, acquired := h.acquireResponsesUserSlot(c, subject.UserID, subject.Concurrency, reqStream && !poolQuotaHTTP, &streamStarted, reqLog)
+ 	if !acquired {
+ 		return
+ 	}
+@@ -685,6 +692,13 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
+ 	pricingCtx, pricingAt := h.gatewayService.WithOpenAIRequestPricingContext(c.Request.Context(), apiKey.GroupID)
+ 	c.Request = c.Request.WithContext(pricingCtx)
+ 
++	writePoolQuota := func(failover *service.UpstreamFailoverError) bool {
++		return poolQuotaHTTP && previousResponseID == "" && h.writeCodexPoolQuotaHTTP(c, service.CodexPoolQuotaRequest{
++			GroupID: apiKey.GroupID, Model: forwardModel,
++			Transport: service.OpenAIUpstreamTransportAny, Capability: requiredCapability, FailedAccounts: failedAccountIDs,
++		}, failover)
++	}
++
+ 	for {
+ 		// Streaming Forward intentionally detaches the upstream request so usage can
+ 		// be drained after a disconnect. Re-check the client context before every
+@@ -733,11 +747,17 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
+ 				cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, reqModel, reqModel, requestPlatform)
+ 				cls = classifySelectionFailureError(err, cls)
+ 				if !cls.ModelNotFound {
++					if errors.Is(err, service.ErrNoAvailableAccounts) && writePoolQuota(nil) {
++						return
++					}
+ 					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
+ 				}
+ 				h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
+ 				return
+ 			}
++			if errors.Is(err, service.ErrNoAvailableAccounts) && writePoolQuota(lastFailoverErr) {
++				return
++			}
+ 			if lastFailoverErr != nil {
+ 				h.handleFailoverExhausted(c, lastFailoverErr, streamStarted)
+ 			} else {
+@@ -748,6 +768,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
+ 		if selection == nil || selection.Account == nil {
+ 			cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, reqModel, reqModel, requestPlatform)
+ 			if !cls.ModelNotFound {
++				if writePoolQuota(lastFailoverErr) {
++					return
++				}
+ 				markOpsRoutingCapacityLimited(c)
+ 			}
+ 			h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
+@@ -793,7 +816,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
+ 		reqLog.Debug("openai.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
+ 		setOpsSelectedAccount(c, account.ID, account.Platform)
+ 
+-		accountReleaseFunc, slotResult := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
++		accountReleaseFunc, slotResult := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream && !poolQuotaHTTP, &streamStarted, reqLog)
+ 		if slotResult == openAISlotAcquireProfitVetoed {
+ 			// 利润终检否决：排除该账号重新选号，全池耗尽由下一轮选号报错；
+ 			// 否决次数达上限则直接终止，避免排队抢槽后才终检的延迟放大。
+@@ -969,11 +992,17 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
+ 					failedAccountIDs[account.ID] = struct{}{}
+ 					lastFailoverErr = failoverErr
+ 					if switchCount >= maxAccountSwitches {
++						if writePoolQuota(failoverErr) {
++							return
++						}
+ 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
+ 						return
+ 					}
+ 					switchCount++
+ 					if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount, &oauth429FailoverState) {
++						if writePoolQuota(failoverErr) {
++							return
++						}
+ 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
+ 						return
+ 					}
+@@ -2834,6 +2863,35 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
+ 			return true
+ 		}
+ 	}
++	// 与 HTTP Responses 路径保持一致：生图意图请求要求账号支持 Responses API（#4417）。
++	// WSv2 传输本身已隐含 Responses 支持，此处为防御性对齐。
++	// 使用 IsExplicitImageGenerationIntent 排除被动 namespace 声明（#4476）。
++	requiredCapability := service.OpenAIEndpointCapabilityChatCompletions
++	if service.IsExplicitImageGenerationIntent("/v1/responses", reqModel, firstMessage) && requestPlatform == service.PlatformOpenAI {
++		requiredCapability = service.OpenAIEndpointCapabilityResponses
++	}
++
++	supportsPoolQuotaWS := requestPlatform == service.PlatformOpenAI
++	poolQuotaKey := apiKey
++	poolQuotaRouteMatchesSelection := true
++	poolQuotaRequest := func() service.CodexPoolQuotaRequest {
++		return service.CodexPoolQuotaRequest{
++			GroupID: apiKey.GroupID, Model: wsForwardModel, PreviousResponseID: previousResponseID,
++			PreviousResponseCanMove: previousResponseCanMove, Transport: requiredTransport, Capability: requiredCapability,
++		}
++	}
++	writePoolQuotaWS := func() bool {
++		if !supportsPoolQuotaWS || !poolQuotaRouteMatchesSelection || !codexPoolQuotaEnabled(poolQuotaKey) {
++			return false
++		}
++		req := poolQuotaRequest()
++		req.FailedAccounts = failedAccountIDs
++		if !h.writeCodexPoolQuotaWS(ctx, c, wsConn, req) {
++			return false
++		}
++		closeOpenAIClientWS(wsConn, coderws.StatusNormalClosure, "")
++		return true
++	}
+ 	handleWSFailover := func(account *service.Account, failoverErr *service.UpstreamFailoverError) bool {
+ 		if ctx.Err() != nil {
+ 			return false
+@@ -2853,11 +2911,17 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
+ 		failedAccountIDs[account.ID] = struct{}{}
+ 		lastFailoverErr = failoverErr
+ 		if switchCount >= maxAccountSwitches {
++			if writePoolQuotaWS() {
++				return false
++			}
+ 			closeOpenAIWSFailoverExhausted(c, wsConn, failoverErr)
+ 			return false
+ 		}
+ 		switchCount++
+ 		if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount, &oauth429FailoverState) {
++			if writePoolQuotaWS() {
++				return false
++			}
+ 			closeOpenAIWSFailoverExhausted(c, wsConn, failoverErr)
+ 			return false
+ 		}
+@@ -2873,14 +2937,6 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
+ 		return ensureUserSlotHeld()
+ 	}
+ 
+-	// 与 HTTP Responses 路径保持一致：生图意图请求要求账号支持 Responses API（#4417）。
+-	// WSv2 传输本身已隐含 Responses 支持，此处为防御性对齐。
+-	// 使用 IsExplicitImageGenerationIntent 排除被动 namespace 声明（#4476）。
+-	requiredCapability := service.OpenAIEndpointCapabilityChatCompletions
+-	if service.IsExplicitImageGenerationIntent("/v1/responses", reqModel, firstMessage) && requestPlatform == service.PlatformOpenAI {
+-		requiredCapability = service.OpenAIEndpointCapabilityResponses
+-	}
+-
+ 	// 分组利润控制：WS 桥按连接装配定价上下文并装门（选号与抢槽共用该
+ 	// ctx）。连接内不重选号，但每个 turn 开始经 BeforeTurn 重新冻结 pricingAt
+ 	// 并按最新门复核当前账号（准入与计费同源），峰前建连保活不能让后续 turn
+@@ -2913,6 +2969,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
+ 				zap.Error(openAICompatibleSelectionErrorForLog(err, requestPlatform)),
+ 				zap.Int("excluded_account_count", len(failedAccountIDs)),
+ 			)
++			if errors.Is(err, service.ErrNoAvailableAccounts) && writePoolQuotaWS() {
++				return
++			}
+ 			if lastFailoverErr != nil {
+ 				closeOpenAIWSFailoverExhausted(c, wsConn, lastFailoverErr)
+ 			} else {
+@@ -2921,6 +2980,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
+ 			return
+ 		}
+ 		if selection == nil || selection.Account == nil {
++			if writePoolQuotaWS() {
++				return
++			}
+ 			if lastFailoverErr != nil {
+ 				closeOpenAIWSFailoverExhausted(c, wsConn, lastFailoverErr)
+ 			} else {
+@@ -3062,6 +3124,11 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
+ 			closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "billing check failed")
+ 			return
+ 		}
++		type quotaTurnRoute struct {
++			turn int
++			req  service.CodexPoolQuotaRequest
++		}
++		var quotaRoute atomic.Pointer[quotaTurnRoute]
+ 		hooks := &service.OpenAIWSIngressHooks{
+ 			ClientLifecycleContext:      clientLifecycleCtx,
+ 			InitialRequestModel:         reqModel,
+@@ -3098,6 +3165,20 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
+ 				// 则关闭整条连接，与推理强度 deny 一致。实际生效模型始终参与校验；
+ 				// 帧内重复 model 键/大小写变体/嵌套 session.model 额外逐一校验，
+ 				// 防止候选集非空时掩盖被轮换掉的禁用模型。
++				if supportsPoolQuotaWS {
++					quotaModel := model
++					if apiKey.Group != nil && apiKey.Group.Platform == service.PlatformComposite {
++						quotaModel = wsRouteModel
++					}
++					if mapped := turnChannelMapping.Load(); mapped != nil && mapped.turn == turn && mapped.mapping.MappedModel != "" {
++						quotaModel = mapped.mapping.MappedModel
++					}
++					capability := openAIResponsesRequiredCapabilityForRequest(service.IsExplicitImageGenerationIntent("/v1/responses", model, payload), false, requestPlatform)
++					quotaRoute.Store(&quotaTurnRoute{turn: turn, req: service.CodexPoolQuotaRequest{
++						GroupID: apiKey.GroupID, Model: quotaModel,
++						Transport: requiredTransport, Capability: capability,
++					}})
++				}
+ 				frameModelCandidates := requestmodel.FromBodyCandidates("", "application/json", payload)
+ 				candidates := append([]string{model}, frameModelCandidates...)
+ 				if blocked := blockedModelAllowlistCandidate(apiKey.Group, candidates); blocked != "" {
+@@ -3140,6 +3221,14 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
+ 				if turn > 1 && !mappedModelUnchanged && !account.IsModelSupported(model) && !account.IsModelSupported(mapping.MappedModel) {
+ 					return "", newOpenAIWSUnsupportedModelSwitchError(mapping.MappedModel)
+ 				}
++				if route := quotaRoute.Load(); route != nil && route.turn == turn {
++					next := *route
++					next.req.Model = mapping.MappedModel
++					if next.req.Model == "" {
++						next.req.Model = routeModel
++					}
++					quotaRoute.Store(&next)
++				}
+ 				turnChannelMapping.Store(&openAIWSTurnChannelMappingSnapshot{turn: turn, mapping: mapping})
+ 				return mapping.MappedModel, nil
+ 			},
+@@ -3304,6 +3393,32 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
+ 		// 说明该会话链不属于本次调度到的账号，原样转发会触发上游会话链鉴权失败（“鉴权失败，请检查 API Key”）。
+ 		// 故剥离首包里的 previous_response_id，改用首包内 input 重建上下文；带 function_call_output 的
+ 		// 工具续链无法重建，保持原样。仅作用于首轮首包，后续 turn 的续链由 WS 转发层既有逻辑处理。
++		if supportsPoolQuotaWS {
++			hooks.OnQuotaFailure = func(turn int, independent bool) (bool, bool) {
++				turnKey := turnBillingAPIKeys.forTurn(turn, poolQuotaKey)
++				if !codexPoolQuotaEnabled(turnKey) {
++					return false, false
++				}
++				req := poolQuotaRequest()
++				if turn > 1 {
++					route := quotaRoute.Load()
++					if !independent || route == nil || route.turn != turn {
++						return false, true
++					}
++					req = route.req
++				} else if !poolQuotaRouteMatchesSelection {
++					return false, true
++				}
++				req.FailedAccounts = map[int64]struct{}{account.ID: {}}
++				if turn == 1 {
++					for id := range failedAccountIDs {
++						req.FailedAccounts[id] = struct{}{}
++					}
++				}
++				turnCtx, _ := h.gatewayService.WithOpenAITurnPricingContext(withOpenAIWSTurnBillingGroup(ctx, turnKey), apiKey.GroupID)
++				return h.writeCodexPoolQuotaWS(turnCtx, c, wsConn, req), true
++			}
++		}
+ 		if previousResponseID != "" && !scheduleDecision.StickyPreviousHit && previousResponseCanMove {
+ 			wsFirstMessage = service.RemovePreviousResponseIDFromBody(wsFirstMessage)
+ 			reqLog.Debug("openai.websocket_previous_response_id_stripped_cross_group",
+@@ -3341,6 +3456,13 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
+ 				wsAttemptMessage = nextAttemptMessage
+ 				if retryCurrentTurn {
+ 					previousResponseID = ""
++					// Bridge replay keeps the connection's original scheduler model and
++					// capability. Diagnose only when they also match the replayed turn.
++					route := quotaRoute.Load()
++					poolQuotaRouteMatchesSelection = route != nil && route.req.Model == wsForwardModel && route.req.Capability == requiredCapability
++					if route != nil {
++						poolQuotaKey = turnBillingAPIKeys.forTurn(route.turn, poolQuotaKey)
++					}
+ 					reqLog.Warn("openai.websocket_current_turn_failover_retry",
+ 						zap.Int64("account_id", account.ID),
+ 						zap.Int("upstream_status", failoverErr.StatusCode),
+diff --git a/backend/internal/pkg/openai/responses_events.go b/backend/internal/pkg/openai/responses_events.go
+new file mode 100644
+index 000000000..19af116a2
+--- /dev/null
++++ b/backend/internal/pkg/openai/responses_events.go
+@@ -0,0 +1,17 @@
++package openai
++
++import "strings"
++
++// IsResponsesMetadataEvent identifies lifecycle metadata and protocol heartbeats.
++// Treat unknown events as output when deciding whether retry is still safe.
++func IsResponsesMetadataEvent(eventType string) bool {
++	switch strings.TrimSpace(eventType) {
++	// Queuing and moderation metadata do not commit model output or disarm the
++	// first-output timeout; a following overload must remain safe to retry.
++	case "response.created", "response.queued", "response.in_progress", "response.metadata",
++		"codex.rate_limits", "codex.response.metadata", "keepalive":
++		return true
++	default:
++		return false
++	}
++}
+diff --git a/backend/internal/repository/account_repo.go b/backend/internal/repository/account_repo.go
+index 80bebe831..126b7ce0b 100644
+--- a/backend/internal/repository/account_repo.go
++++ b/backend/internal/repository/account_repo.go
+@@ -2389,6 +2389,32 @@ func (r *accountRepository) SetRateLimited(ctx context.Context, id int64, resetA
+ 	return nil
+ }
+ 
++// SetCodexQuotaRateLimited writes the evidence and its scheduling generation
++// together, without replacing unrelated extra fields.
++func (r *accountRepository) SetCodexQuotaRateLimited(ctx context.Context, id int64, cooldown, reset time.Time, explicit bool) error {
++	observed := time.Now().UTC().Truncate(time.Microsecond)
++	cooldown = cooldown.UTC().Truncate(time.Microsecond)
++	evidence, err := json.Marshal(map[string]any{
++		"limited_at": observed, "cooldown_until": cooldown, "reset_at": reset.UTC(), "explicit": explicit,
++	})
++	if err != nil {
++		return err
++	}
++	_, err = clientFromContext(ctx, r.client).ExecContext(ctx, `
++		UPDATE accounts
++		SET rate_limited_at = $2, rate_limit_reset_at = $3, updated_at = $2,
++		    extra = COALESCE(extra, '{}'::jsonb) || jsonb_build_object($4::text, $5::jsonb)
++		WHERE id = $1 AND deleted_at IS NULL`, id, observed, cooldown, service.OpenAICodexQuotaCooldownExtraKey, string(evidence))
++	if err != nil {
++		return err
++	}
++	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
++		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue Codex quota cooldown failed: account=%d err=%v", id, err)
++	}
++	r.syncSchedulerAccountSnapshot(ctx, id)
++	return nil
++}
++
+ // SetRateLimitedIfLater atomically extends an account-level rate limit. Grok
+ // requests may finish concurrently, so an older response must not overwrite a
+ // later reset boundary observed by another request or instance.
+diff --git a/backend/internal/repository/api_key_repo.go b/backend/internal/repository/api_key_repo.go
+index 6779be889..d14b471c6 100644
+--- a/backend/internal/repository/api_key_repo.go
++++ b/backend/internal/repository/api_key_repo.go
+@@ -213,6 +213,7 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
+ 				group.FieldAllowLive,
+ 				group.FieldForceOpenaiFast,
+ 				group.FieldForceOpenaiUltrafast,
++				group.FieldOpenaiCodexPoolQuotaErrorEnabled,
+ 				group.FieldFreeOpenaiFast,
+ 				group.FieldDefaultMappedModel,
+ 				group.FieldMessagesDispatchModelConfig,
+@@ -1030,6 +1031,7 @@ func groupEntityToService(g *dbent.Group) *service.Group {
+ 		AllowLive:                       g.AllowLive,
+ 		ForceOpenAIFast:                 g.ForceOpenaiFast,
+ 		ForceOpenAIUltrafast:            g.ForceOpenaiUltrafast,
++		CodexPoolQuotaErrorEnabled:      g.OpenaiCodexPoolQuotaErrorEnabled,
+ 		FreeOpenAIFast:                  g.FreeOpenaiFast,
+ 		RequireOAuthOnly:                g.RequireOauthOnly,
+ 		RequirePrivacySet:               g.RequirePrivacySet,
+diff --git a/backend/internal/repository/codex_pool_quota_postgres_test.go b/backend/internal/repository/codex_pool_quota_postgres_test.go
+new file mode 100644
+index 000000000..ad31ad6c4
+--- /dev/null
++++ b/backend/internal/repository/codex_pool_quota_postgres_test.go
+@@ -0,0 +1,116 @@
++package repository
++
++import (
++	"context"
++	"database/sql"
++	"fmt"
++	"io/fs"
++	"os"
++	"strings"
++	"testing"
++	"testing/fstest"
++	"time"
++
++	"entgo.io/ent/dialect"
++	entsql "entgo.io/ent/dialect/sql"
++	dbent "github.com/Wei-Shaw/sub2api/ent"
++	"github.com/Wei-Shaw/sub2api/internal/service"
++	"github.com/Wei-Shaw/sub2api/migrations"
++	"github.com/lib/pq"
++	"github.com/stretchr/testify/require"
++)
++
++func TestCodexPoolQuotaPostgresMigration(t *testing.T) {
++	dsn := os.Getenv("CODEX_POOL_QUOTA_TEST_DSN")
++	if dsn == "" {
++		t.Skip("set CODEX_POOL_QUOTA_TEST_DSN to a PostgreSQL instance with permission to create test databases")
++	}
++	ctx := context.Background()
++	admin, err := sql.Open("postgres", dsn)
++	require.NoError(t, err)
++	t.Cleanup(func() { require.NoError(t, admin.Close()) })
++	names, err := fs.Glob(migrations.FS, "*.sql")
++	require.NoError(t, err)
++	for _, baseline := range []string{"", "218_", "253_"} {
++		t.Run("baseline_"+baseline, func(t *testing.T) {
++			name := fmt.Sprintf("codex_pool_quota_%d", time.Now().UnixNano())
++			_, err := admin.ExecContext(ctx, "CREATE DATABASE "+pq.QuoteIdentifier(name))
++			require.NoError(t, err)
++			t.Cleanup(func() {
++				_, err := admin.ExecContext(ctx, "DROP DATABASE "+pq.QuoteIdentifier(name))
++				require.NoError(t, err)
++			})
++			db, err := sql.Open("postgres", dsn+" dbname="+name)
++			require.NoError(t, err)
++			t.Cleanup(func() { require.NoError(t, db.Close()) })
++
++			var legacyGroupID int64
++			oldMigrations := fstest.MapFS{}
++			if baseline != "" {
++				for _, name := range names {
++					if strings.Compare(name, baseline) >= 0 {
++						continue
++					}
++					body, err := fs.ReadFile(migrations.FS, name)
++					require.NoError(t, err)
++					oldMigrations[name] = &fstest.MapFile{Data: body}
++				}
++				require.NoError(t, applyMigrationsFS(ctx, db, oldMigrations))
++				require.NoError(t, db.QueryRowContext(ctx,
++					"INSERT INTO groups (name, platform) VALUES ('legacy-codex', 'openai') RETURNING id").Scan(&legacyGroupID))
++			}
++			require.NoError(t, ApplyMigrations(ctx, db))
++
++			client := dbent.NewClient(dbent.Driver(entsql.OpenDB(dialect.Postgres, db)))
++			groups := NewGroupRepository(client, db)
++			if legacyGroupID != 0 {
++				group, err := groups.GetByIDLite(ctx, legacyGroupID)
++				require.NoError(t, err)
++				require.False(t, group.CodexPoolQuotaErrorEnabled)
++			}
++			group := &service.Group{Name: "codex-enabled", Platform: service.PlatformOpenAI, Status: service.StatusActive, CodexPoolQuotaErrorEnabled: true}
++			require.NoError(t, groups.Create(ctx, group))
++
++			// A rollback uses the earlier migration runner and writes only columns
++			// it knows about. Re-upgrading must preserve the newer setting.
++			if baseline != "" {
++				require.NoError(t, applyMigrationsFS(ctx, db, oldMigrations))
++			}
++			_, err = db.ExecContext(ctx, "UPDATE groups SET description = 'legacy writer' WHERE id = $1", group.ID)
++			require.NoError(t, err)
++			require.NoError(t, ApplyMigrations(ctx, db))
++			persisted, err := groups.GetByIDLite(ctx, group.ID)
++			require.NoError(t, err)
++			require.True(t, persisted.CodexPoolQuotaErrorEnabled)
++			require.Equal(t, "legacy writer", persisted.Description)
++			persisted.CodexPoolQuotaErrorEnabled = false
++			require.NoError(t, groups.Update(ctx, persisted))
++			persisted, err = groups.GetByIDLite(ctx, group.ID)
++			require.NoError(t, err)
++			require.False(t, persisted.CodexPoolQuotaErrorEnabled)
++
++			var id int64
++			require.NoError(t, db.QueryRowContext(ctx, `INSERT INTO accounts (name, platform, type, extra)
++				VALUES ('codex-quota-proof','openai','oauth','{"unrelated":true}') RETURNING id`).Scan(&id))
++			accounts, ok := NewAccountRepository(client, db, nil).(*accountRepository)
++			require.True(t, ok)
++			reset := time.Now().Add(time.Hour).UTC().Truncate(time.Microsecond)
++			require.NoError(t, accounts.SetCodexQuotaRateLimited(ctx, id, reset, reset, true))
++			account, err := accounts.GetByID(ctx, id)
++			require.NoError(t, err)
++			require.True(t, reset.Equal(*account.RateLimitResetAt))
++			require.Equal(t, true, account.Extra["unrelated"])
++			proof, ok := account.Extra[service.OpenAICodexQuotaCooldownExtraKey].(map[string]any)
++			require.True(t, ok)
++			limitedAt, ok := proof["limited_at"].(string)
++			require.True(t, ok)
++			observed, err := time.Parse(time.RFC3339Nano, limitedAt)
++			require.NoError(t, err)
++			require.True(t, observed.Equal(*account.RateLimitedAt))
++			require.NoError(t, accounts.ClearRateLimit(ctx, id))
++			account, err = accounts.GetByID(ctx, id)
++			require.NoError(t, err)
++			require.Nil(t, account.RateLimitResetAt)
++		})
++	}
++}
+diff --git a/backend/internal/repository/group_repo.go b/backend/internal/repository/group_repo.go
+index f185870c0..c02771f25 100644
+--- a/backend/internal/repository/group_repo.go
++++ b/backend/internal/repository/group_repo.go
+@@ -139,6 +139,7 @@ func createGroupRecord(ctx context.Context, client *dbent.Client, groupIn *servi
+ 		SetAllowLive(groupIn.AllowLive).
+ 		SetForceOpenaiFast(groupIn.ForceOpenAIFast).
+ 		SetForceOpenaiUltrafast(groupIn.ForceOpenAIUltrafast).
++		SetOpenaiCodexPoolQuotaErrorEnabled(groupIn.CodexPoolQuotaErrorEnabled).
+ 		SetFreeOpenaiFast(groupIn.FreeOpenAIFast).
+ 		SetRequireOauthOnly(groupIn.RequireOAuthOnly).
+ 		SetRequirePrivacySet(groupIn.RequirePrivacySet).
+@@ -325,6 +326,7 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
+ 		SetAllowLive(groupIn.AllowLive).
+ 		SetForceOpenaiFast(groupIn.ForceOpenAIFast).
+ 		SetForceOpenaiUltrafast(groupIn.ForceOpenAIUltrafast).
++		SetOpenaiCodexPoolQuotaErrorEnabled(groupIn.CodexPoolQuotaErrorEnabled).
+ 		SetFreeOpenaiFast(groupIn.FreeOpenAIFast).
+ 		SetRequireOauthOnly(groupIn.RequireOAuthOnly).
+ 		SetRequirePrivacySet(groupIn.RequirePrivacySet).
+diff --git a/backend/internal/service/admin_group.go b/backend/internal/service/admin_group.go
+index fbe32e830..514fb95af 100644
+--- a/backend/internal/service/admin_group.go
++++ b/backend/internal/service/admin_group.go
+@@ -370,6 +370,7 @@ func sanitizeGroupOpenAIFast(group *Group) {
+ 		if group != nil {
+ 			group.ForceOpenAIFast = false
+ 			group.ForceOpenAIUltrafast = false
++			group.CodexPoolQuotaErrorEnabled = false
+ 			group.FreeOpenAIFast = false
+ 		}
+ 	}
+@@ -628,6 +629,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
+ 		AllowLive:                       input.AllowLive,
+ 		ForceOpenAIFast:                 input.ForceOpenAIFast,
+ 		ForceOpenAIUltrafast:            input.ForceOpenAIUltrafast,
++		CodexPoolQuotaErrorEnabled:      input.CodexPoolQuotaErrorEnabled,
+ 		FreeOpenAIFast:                  input.FreeOpenAIFast,
+ 		RequireOAuthOnly:                input.RequireOAuthOnly,
+ 		RequirePrivacySet:               input.RequirePrivacySet,
+@@ -1024,6 +1026,9 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
+ 	if input.ForceOpenAIUltrafast != nil {
+ 		group.ForceOpenAIUltrafast = *input.ForceOpenAIUltrafast
+ 	}
++	if input.CodexPoolQuotaErrorEnabled != nil {
++		group.CodexPoolQuotaErrorEnabled = *input.CodexPoolQuotaErrorEnabled
++	}
+ 	if input.FreeOpenAIFast != nil {
+ 		group.FreeOpenAIFast = *input.FreeOpenAIFast
+ 	}
+diff --git a/backend/internal/service/admin_group_duplicate.go b/backend/internal/service/admin_group_duplicate.go
+index ab6afc7f7..d242f20d4 100644
+--- a/backend/internal/service/admin_group_duplicate.go
++++ b/backend/internal/service/admin_group_duplicate.go
+@@ -148,6 +148,7 @@ func cloneGroupForDuplicate(source *Group, operationID string) *Group {
+ 		AllowLive:                       source.AllowLive,
+ 		ForceOpenAIFast:                 source.ForceOpenAIFast,
+ 		ForceOpenAIUltrafast:            source.ForceOpenAIUltrafast,
++		CodexPoolQuotaErrorEnabled:      source.CodexPoolQuotaErrorEnabled,
+ 		FreeOpenAIFast:                  source.FreeOpenAIFast,
+ 		RequireOAuthOnly:                source.RequireOAuthOnly,
+ 		RequirePrivacySet:               source.RequirePrivacySet,
+diff --git a/backend/internal/service/admin_service.go b/backend/internal/service/admin_service.go
+index 5a8b764e1..35ba802c0 100644
+--- a/backend/internal/service/admin_service.go
++++ b/backend/internal/service/admin_service.go
+@@ -295,6 +295,7 @@ type CreateGroupInput struct {
+ 	AllowLive                   bool
+ 	ForceOpenAIFast             bool
+ 	ForceOpenAIUltrafast        bool
++	CodexPoolQuotaErrorEnabled  bool
+ 	FreeOpenAIFast              bool
+ 	DefaultMappedModel          string
+ 	RequireOAuthOnly            bool
+@@ -379,6 +380,7 @@ type UpdateGroupInput struct {
+ 	AllowLive                   *bool
+ 	ForceOpenAIFast             *bool
+ 	ForceOpenAIUltrafast        *bool
++	CodexPoolQuotaErrorEnabled  *bool
+ 	FreeOpenAIFast              *bool
+ 	DefaultMappedModel          *string
+ 	RequireOAuthOnly            *bool
+diff --git a/backend/internal/service/api_key_auth_cache.go b/backend/internal/service/api_key_auth_cache.go
+index 0760068b9..9ab9c0228 100644
+--- a/backend/internal/service/api_key_auth_cache.go
++++ b/backend/internal/service/api_key_auth_cache.go
+@@ -109,6 +109,7 @@ type APIKeyAuthGroupSnapshot struct {
+ 	AllowLive                   bool                              `json:"allow_live"`
+ 	ForceOpenAIFast             bool                              `json:"force_openai_fast"`
+ 	ForceOpenAIUltrafast        bool                              `json:"force_openai_ultrafast"`
++	CodexPoolQuotaErrorEnabled  bool                              `json:"openai_codex_pool_quota_error_enabled"`
+ 	FreeOpenAIFast              bool                              `json:"free_openai_fast"`
+ 	DefaultMappedModel          string                            `json:"default_mapped_model,omitempty"`
+ 	MessagesDispatchModelConfig OpenAIMessagesDispatchModelConfig `json:"messages_dispatch_model_config,omitempty"`
+diff --git a/backend/internal/service/api_key_auth_cache_impl.go b/backend/internal/service/api_key_auth_cache_impl.go
+index 9ee51e0a0..db83f1c56 100644
+--- a/backend/internal/service/api_key_auth_cache_impl.go
++++ b/backend/internal/service/api_key_auth_cache_impl.go
+@@ -14,7 +14,7 @@ import (
+ 	"github.com/dgraph-io/ristretto"
+ )
+ 
+-const apiKeyAuthSnapshotVersion = 28 // v28: group force_openai_ultrafast (OpenAI gateway reads it from ctx)
++const apiKeyAuthSnapshotVersion = 29 // v29: group Codex pool quota errors
+ 
+ type apiKeyAuthCacheConfig struct {
+ 	l1Size        int
+@@ -422,6 +422,7 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey)
+ 			AllowLive:                       apiKey.Group.AllowLive,
+ 			ForceOpenAIFast:                 apiKey.Group.ForceOpenAIFast,
+ 			ForceOpenAIUltrafast:            apiKey.Group.ForceOpenAIUltrafast,
++			CodexPoolQuotaErrorEnabled:      apiKey.Group.CodexPoolQuotaErrorEnabled,
+ 			FreeOpenAIFast:                  apiKey.Group.FreeOpenAIFast,
+ 			DefaultMappedModel:              apiKey.Group.DefaultMappedModel,
+ 			MessagesDispatchModelConfig:     apiKey.Group.MessagesDispatchModelConfig,
+@@ -528,6 +529,7 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
+ 			AllowLive:                       snapshot.Group.AllowLive,
+ 			ForceOpenAIFast:                 snapshot.Group.ForceOpenAIFast,
+ 			ForceOpenAIUltrafast:            snapshot.Group.ForceOpenAIUltrafast,
++			CodexPoolQuotaErrorEnabled:      snapshot.Group.CodexPoolQuotaErrorEnabled,
+ 			FreeOpenAIFast:                  snapshot.Group.FreeOpenAIFast,
+ 			DefaultMappedModel:              snapshot.Group.DefaultMappedModel,
+ 			MessagesDispatchModelConfig:     snapshot.Group.MessagesDispatchModelConfig,
+diff --git a/backend/internal/service/group.go b/backend/internal/service/group.go
+index 3e55c3e66..ab88e1401 100644
+--- a/backend/internal/service/group.go
++++ b/backend/internal/service/group.go
+@@ -104,6 +104,7 @@ type Group struct {
+ 	AllowLive                   bool
+ 	ForceOpenAIFast             bool // 强制 OpenAI 网关请求使用 service_tier=priority
+ 	ForceOpenAIUltrafast        bool // 对支持 Ultrafast 的模型强制 service_tier=ultrafast，优先于 ForceOpenAIFast
++	CodexPoolQuotaErrorEnabled  bool
+ 	FreeOpenAIFast              bool // OpenAI Fast 请求按 Standard 价格向用户计费
+ 	RequireOAuthOnly            bool // 仅允许非 apikey 类型账号关联（OpenAI/Antigravity/Anthropic/Gemini）
+ 	RequirePrivacySet           bool // 调度时仅允许 privacy 已成功设置的账号（OpenAI/Antigravity/Anthropic/Gemini）
+diff --git a/backend/internal/service/openai_account_runtime_block_fastpath_test.go b/backend/internal/service/openai_account_runtime_block_fastpath_test.go
+index 22076fe9f..56b88cc07 100644
+--- a/backend/internal/service/openai_account_runtime_block_fastpath_test.go
++++ b/backend/internal/service/openai_account_runtime_block_fastpath_test.go
+@@ -255,7 +255,7 @@ func TestOpenAIWSErrorEvent_OrdinaryModelIgnoresHandshakeQuotaHeaders(t *testing
+ 	headers.Set("x-codex-primary-window-minutes", "10080")
+ 	payload := []byte(`{"type":"error","error":{"type":"rate_limit_error","code":"rate_limit_exceeded"}}`)
+ 
+-	svc.persistOpenAIWSRateLimitSignal(context.Background(), account, headers, payload, "rate_limit_exceeded", "rate_limit_error", "quota exhausted", "gpt-5.3-codex")
++	svc.persistOpenAIWSEventRateLimit(context.Background(), account, headers, payload, "rate_limit_exceeded", "rate_limit_error", "quota exhausted", "gpt-5.3-codex")
+ 
+ 	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
+ 	require.Zero(t, repo.setRateLimitedCalls)
+@@ -273,7 +273,7 @@ func TestOpenAIWSErrorEvent_SparkQuotaUsesHandshakeQuotaHeaders(t *testing.T) {
+ 	headers.Set("x-codex-primary-window-minutes", "10080")
+ 	payload := []byte(`{"type":"error","error":{"type":"rate_limit_error","code":"rate_limit_exceeded"}}`)
+ 
+-	svc.persistOpenAIWSRateLimitSignal(context.Background(), account, headers, payload, "rate_limit_exceeded", "rate_limit_error", "quota exhausted", "gpt-5.3-codex-spark")
++	svc.persistOpenAIWSEventRateLimit(context.Background(), account, headers, payload, "rate_limit_exceeded", "rate_limit_error", "quota exhausted", "gpt-5.3-codex-spark")
+ 
+ 	require.Equal(t, 1, repo.setModelRateLimitCalls)
+ 	require.Equal(t, "gpt-5.3-codex-spark", repo.lastModelRateLimitKey)
+diff --git a/backend/internal/service/openai_codex_pool_quota.go b/backend/internal/service/openai_codex_pool_quota.go
+new file mode 100644
+index 000000000..e761c6c5c
+--- /dev/null
++++ b/backend/internal/service/openai_codex_pool_quota.go
+@@ -0,0 +1,331 @@
++package service
++
++import (
++	"context"
++	"encoding/json"
++	"maps"
++	"net/http"
++	"strconv"
++	"strings"
++	"time"
++
++	"github.com/Wei-Shaw/sub2api/internal/config"
++	"github.com/gin-gonic/gin"
++)
++
++const (
++	OpenAICodexQuotaCooldownExtraKey = "codex_quota_cooldown"
++	openAICodexSparkQuotaReason      = "openai_codex_spark_quota_exhausted"
++)
++
++// CodexPoolQuotaRequest uses the same route inputs as the account scheduler.
++// FailedAccounts identifies encountered failures, never accounts skipped by an attempt budget.
++type CodexPoolQuotaRequest struct {
++	GroupID                 *int64
++	Model                   string
++	PreviousResponseID      string
++	PreviousResponseCanMove bool
++	Transport               OpenAIUpstreamTransport
++	Capability              OpenAIEndpointCapability
++	FailedAccounts          map[int64]struct{}
++}
++
++// EarliestCodexPoolQuotaReset returns zero when a candidate can still serve
++// the request or all blocked candidates have an unknown recovery time.
++func (s *OpenAIGatewayService) EarliestCodexPoolQuotaReset(ctx context.Context, req CodexPoolQuotaRequest) time.Time {
++	if s == nil || s.accountRepo == nil || req.GroupID == nil || req.Model == "" {
++		return time.Time{}
++	}
++	includeGrouped := s.cfg != nil && s.cfg.RunMode == config.RunModeSimple
++	groupID := req.GroupID
++	if includeGrouped {
++		groupID = nil
++	}
++	if s.checkChannelPricingRestriction(ctx, req.GroupID, req.Model) {
++		return time.Time{}
++	}
++	var pinnedAccountID int64
++	if req.PreviousResponseID != "" && !req.PreviousResponseCanMove {
++		var err error
++		pinnedAccountID, err = s.getOpenAIWSStateStore().GetResponseAccount(ctx, *req.GroupID, req.PreviousResponseID)
++		if err != nil || pinnedAccountID == 0 {
++			return time.Time{}
++		}
++	}
++	accounts, err := s.accountRepo.ListModelAvailabilityCandidates(ctx, groupID, []string{PlatformOpenAI}, includeGrouped)
++	if err != nil {
++		return time.Time{}
++	}
++	ctx = s.withOpenAIQuotaAutoPauseContext(ctx)
++	ctx = s.withOpenAIGroupPrivacyRequirement(ctx, req.GroupID)
++	checkUpstream := s.needsUpstreamChannelRestrictionCheck(ctx, req.GroupID)
++	var thresholds map[string]int
++	if s.rateLimitService != nil && s.rateLimitService.settingService != nil {
++		thresholds = s.rateLimitService.settingService.GetAccountSchedulingThresholds(ctx)
++	}
++	imageSize, _ := openAIImageSizeRoutingFromContext(ctx)
++	imageTier, explicitImageTier := ClassifyImageBillingTier(imageSize)
++	now := time.Now()
++	var earliest time.Time
++	for i := range accounts {
++		account := &accounts[i]
++		if pinnedAccountID != 0 && account.ID != pinnedAccountID ||
++			s.openAIGroupRequiresPrivacySet(ctx, req.GroupID) && !account.IsPrivacySet() ||
++			!s.isOpenAIAccountTransportCompatible(account, req.Transport) ||
++			explicitImageTier && !account.SupportsOpenAIImageSizeTier(imageTier) ||
++			!parentHealthyForShadow(account, s.parentAccountLookup(ctx)) ||
++			checkUpstream && s.isUpstreamModelRestrictedByChannel(ctx, *req.GroupID, account, req.Model, false) {
++			continue
++		}
++		// The scheduler retries with proxy quarantine bypassed when no account is available.
++		reset, admissible := s.codexQuotaCandidateReset(ctx, account, req, thresholds, now)
++		_, failed := req.FailedAccounts[account.ID]
++		if admissible && !failed {
++			return time.Time{}
++		}
++		if !reset.IsZero() && (earliest.IsZero() || reset.Before(earliest)) {
++			earliest = reset
++		}
++	}
++	return earliest
++}
++
++// A zero reset for a blocked account represents infinity. Check all blockers
++// before recording a finite timestamp, since they must all clear on that account.
++func (s *OpenAIGatewayService) codexQuotaCandidateReset(ctx context.Context, account *Account, req CodexPoolQuotaRequest, thresholds map[string]int, now time.Time) (time.Time, bool) {
++	remaining := *account
++	var reset time.Time
++	if current := account.RateLimitResetAt; current != nil && current.After(now) {
++		reset = recordedCodexQuotaReset(account, now)
++		if reset.IsZero() {
++			return time.Time{}, false
++		}
++		remaining.RateLimitResetAt = nil
++	}
++	for _, key := range account.modelRateLimitKeysForRequest(ctx, req.Model) {
++		if current := account.modelRateLimitResetAt(key); current != nil && current.After(now) {
++			if account.modelRateLimitReason(key) != openAICodexSparkQuotaReason {
++				return time.Time{}, false
++			}
++			reset = laterQuotaReset(reset, *current)
++			limits, _ := remaining.Extra[modelRateLimitsKey].(map[string]any)
++			clonedLimits := maps.Clone(limits)
++			delete(clonedLimits, key)
++			remaining.Extra = maps.Clone(remaining.Extra)
++			remaining.Extra[modelRateLimitsKey] = clonedLimits
++		}
++	}
++	if until, ok := s.openaiAccountRuntimeBlockUntil.Load(account.ID); ok {
++		if deadline, ok := until.(time.Time); ok && deadline.After(now) &&
++			deadline.Truncate(time.Microsecond).After(reset) && accountPersistedSchedulingCooldownActive(account) {
++			return time.Time{}, false
++		}
++	}
++	if s.isOpenAIAccountModelRuntimeBlocked(account, req.Model) {
++		return time.Time{}, false
++	}
++
++	for decision := range openAIAccountQuotaPauseDecisions(ctx, account, now) {
++		if decision.reason != "" && !openAIAutoResetNoCreditConfirmed(openAIAutoResetStateFromExtra(account.Extra), now) {
++			// A reset may be evaluated or redeemed before the natural window ends.
++			return time.Time{}, false
++		}
++		windowReset := codexPausedWindowReset(account, decision.window, decision.utilization, now)
++		if windowReset.IsZero() {
++			return time.Time{}, false
++		}
++		reset = laterQuotaReset(reset, windowReset)
++	}
++	if threshold, ok := resolveEffectiveAccountSchedulingThreshold(account, thresholds, PlatformOpenAI); thresholds != nil && ok && threshold < 100 {
++		for _, candidate := range openAIThresholdCandidates(account, now) {
++			if !candidateMatchesThreshold(candidate, threshold, now) {
++				continue
++			}
++			windowReset := codexPausedWindowReset(account, candidate.window, candidate.usedPercent/100, now)
++			if windowReset.IsZero() {
++				return time.Time{}, false
++			}
++			reset = laterQuotaReset(reset, windowReset)
++			if IsAccountSchedulingThresholdReason(remaining.TempUnschedulableReason) &&
++				remaining.TempUnschedulableUntil != nil && !remaining.TempUnschedulableUntil.After(reset) {
++				remaining.TempUnschedulableUntil = nil
++			}
++		}
++	}
++	if openAICompatibleAccountEligibilityFailureReasonWithQuotaPause(ctx, &remaining, PlatformOpenAI, req.Model, false, req.Capability, false) != "" {
++		return time.Time{}, false
++	}
++	if vetoed, _ := openAIProfitControlVetoReason(ctx, &remaining); vetoed {
++		return time.Time{}, false
++	}
++	if reset.IsZero() {
++		return time.Time{}, true
++	}
++	if !isOpenAIOAuthAccount(account) {
++		return time.Time{}, false
++	}
++	if state := openAIAutoResetStateFromExtra(account.Extra); state != nil && !openAIAutoResetStateStale(state, now) &&
++		(state.Status == OpenAIAutoResetStatusChecking || state.Status == OpenAIAutoResetStatusResetting) {
++		return time.Time{}, false
++	}
++	// An additional exhausted window can outlast the one named by the last 429.
++	if (!isCodexSparkModel(account.GetMappedModel(req.Model)) || account.IsShadow()) &&
++		openAICodexSnapshotIdentityTrusted(account) && !codexAccountHasSpendableCredits(account) {
++		for _, window := range []string{"5h", "7d"} {
++			if utilization, ok := resolveOpenAIQuotaUtilization(account.Extra, window, now); ok && utilization >= 1 {
++				windowReset := codexPausedWindowReset(account, window, utilization, now)
++				if windowReset.IsZero() {
++					return time.Time{}, false
++				}
++				reset = laterQuotaReset(reset, windowReset)
++			}
++		}
++	}
++	if account.AutoPauseOnExpired && account.ExpiresAt != nil && !account.ExpiresAt.After(reset) {
++		return time.Time{}, false
++	}
++	return reset, false
++}
++
++func codexPausedWindowReset(account *Account, window string, utilizationRatio float64, now time.Time) time.Time {
++	if utilizationRatio < 1 || !openAICodexSnapshotIdentityTrusted(account) || codexAccountHasSpendableCredits(account) {
++		return time.Time{}
++	}
++	if reset, ok := openAICodexWindowResetAt(account.Extra, window); ok && reset.After(now) {
++		return reset
++	}
++	return time.Time{}
++}
++
++func laterQuotaReset(a, b time.Time) time.Time {
++	if b.After(a) {
++		return b
++	}
++	return a
++}
++
++func codexHeadersHaveSpendableCredits(headers http.Header) bool {
++	hasCredits, _ := strconv.ParseBool(headers.Get("x-codex-credits-has-credits"))
++	unlimited, _ := strconv.ParseBool(headers.Get("x-codex-credits-unlimited"))
++	balance, _ := strconv.ParseFloat(strings.TrimSpace(headers.Get("x-codex-credits-balance")), 64)
++	return hasCredits || unlimited || balance > 0
++}
++
++func codexAccountHasSpendableCredits(account *Account) bool {
++	raw, err := json.Marshal(account.Extra[openaiQuotaCreditsKey])
++	if err != nil {
++		return false
++	}
++	var snapshot openAICreditsSnapshot
++	if json.Unmarshal(raw, &snapshot) != nil || snapshot.Credits == nil {
++		return false
++	}
++	credits := snapshot.Credits
++	if credits.HasCredits || credits.Unlimited {
++		return true
++	}
++	if credits.Balance != nil {
++		balance, _ := strconv.ParseFloat(strings.TrimSpace(*credits.Balance), 64)
++		return balance > 0
++	}
++	return false
++}
++
++// Store the observation with the cooldown generation. An ordinary 429 or an
++// account reset that changes or clears either timestamp invalidates it.
++func recordedCodexQuotaReset(account *Account, now time.Time) time.Time {
++	raw, ok := account.Extra[OpenAICodexQuotaCooldownExtraKey].(map[string]any)
++	if !ok || account.RateLimitedAt == nil || account.RateLimitResetAt == nil || !account.RateLimitResetAt.After(now) {
++		return time.Time{}
++	}
++	limitedAt, _ := time.Parse(time.RFC3339Nano, stringValue(raw["limited_at"]))
++	cooldown, _ := time.Parse(time.RFC3339Nano, stringValue(raw["cooldown_until"]))
++	reset, _ := time.Parse(time.RFC3339Nano, stringValue(raw["reset_at"]))
++	explicit, _ := raw["explicit"].(bool)
++	if !limitedAt.Equal(*account.RateLimitedAt) || !cooldown.Equal(*account.RateLimitResetAt) ||
++		!reset.After(now) || !explicit && codexAccountHasSpendableCredits(account) {
++		return time.Time{}
++	}
++	return laterQuotaReset(reset, cooldown)
++}
++
++func codexQuota429Reset(account *Account, headers http.Header, body []byte, now time.Time) (time.Time, bool) {
++	if !isOpenAIOAuthAccount(account) || account.IsShadow() {
++		return time.Time{}, false
++	}
++	errObj := openAIErrorObject(body)
++	typ := errObj.Get("type").String()
++	explicit := typ == "usage_limit_reached"
++	var reset time.Time
++	if explicit {
++		if unix := parseOpenAIRateLimitResetTime(body); unix != nil && time.Unix(*unix, 0).After(now) && *unix <= 253402300799 {
++			reset = time.Unix(*unix, 0)
++		}
++	} else if typ != "" || errObj.Get("code").String() != "" ||
++		codexAccountHasSpendableCredits(account) || codexHeadersHaveSpendableCredits(headers) {
++		return time.Time{}, false
++	}
++	snapshot := ParseCodexRateLimitHeaders(headers)
++	if snapshot == nil {
++		return reset, explicit
++	}
++	normalized := snapshot.Normalize()
++	if normalized == nil {
++		return reset, explicit
++	}
++	for _, window := range []struct {
++		used    *float64
++		seconds *int
++	}{
++		{normalized.Used5hPercent, normalized.Reset5hSeconds},
++		{normalized.Used7dPercent, normalized.Reset7dSeconds},
++	} {
++		if window.used == nil || *window.used < 100 {
++			continue
++		}
++		if window.seconds == nil {
++			return time.Time{}, explicit
++		}
++		if int64(*window.seconds) > int64(time.Duration(1<<63-1)/time.Second) {
++			return time.Time{}, explicit
++		}
++		if *window.seconds > 0 {
++			reset = laterQuotaReset(reset, now.Add(time.Duration(*window.seconds)*time.Second))
++		}
++	}
++	return reset, explicit
++}
++
++func (s *RateLimitService) setOpenAICodexRateLimited(ctx context.Context, account *Account, cooldown time.Time, headers http.Header, body []byte) error {
++	if limit := strings.TrimSpace(headers.Get("x-codex-active-limit")); limit != "" && !strings.EqualFold(limit, "codex") {
++		return s.accountRepo.SetRateLimited(ctx, account.ID, cooldown)
++	}
++	reset, explicit := codexQuota429Reset(account, headers, body, time.Now())
++	if repo, ok := s.accountRepo.(interface {
++		SetCodexQuotaRateLimited(context.Context, int64, time.Time, time.Time, bool) error
++	}); ok && !reset.IsZero() {
++		return repo.SetCodexQuotaRateLimited(ctx, account.ID, cooldown, reset, explicit)
++	}
++	return s.accountRepo.SetRateLimited(ctx, account.ID, cooldown)
++}
++
++// A continuation tied to upstream state cannot establish pool availability.
++func openAIWSQuotaRouteIndependent(payload []byte) bool {
++	if len(payload) == 0 || openAIWSPayloadStringFromRaw(payload, "previous_response_id") != "" {
++		return false
++	}
++	coverage := AnalyzeToolCallOutputContextCoverageBytes(payload)
++	return !coverage.HasFunctionCallOutput || coverage.ContextCoversAllCallIDs
++}
++
++type codexPoolQuotaHTTPKey struct{}
++
++// WithCodexPoolQuotaHTTP reserves the HTTP status until the first semantic
++// output. Heartbeats themselves would commit a 200 response.
++func WithCodexPoolQuotaHTTP(ctx context.Context) context.Context {
++	return context.WithValue(ctx, codexPoolQuotaHTTPKey{}, true)
++}
++
++func deferCodexPoolQuotaHTTPCommit(c *gin.Context) bool {
++	return c != nil && c.Request != nil && c.Request.Context().Value(codexPoolQuotaHTTPKey{}) == true
++}
+diff --git a/backend/internal/service/openai_codex_pool_quota_test.go b/backend/internal/service/openai_codex_pool_quota_test.go
+new file mode 100644
+index 000000000..855bf70a1
+--- /dev/null
++++ b/backend/internal/service/openai_codex_pool_quota_test.go
+@@ -0,0 +1,312 @@
++package service
++
++import (
++	"context"
++	"fmt"
++	"net/http"
++	"testing"
++	"time"
++
++	"github.com/stretchr/testify/require"
++)
++
++type codexPoolQuotaAccounts struct {
++	AccountRepository
++	accounts []Account
++}
++
++func (r *codexPoolQuotaAccounts) ListModelAvailabilityCandidates(_ context.Context, _ *int64, _ []string, _ bool) ([]Account, error) {
++	return r.accounts, nil
++}
++
++func quotaTestAccount(id int64, observed, cooldown, reset time.Time, explicit bool) Account {
++	return Account{
++		ID: id, Platform: PlatformOpenAI, Status: StatusActive, Type: AccountTypeOAuth, Schedulable: true,
++		RateLimitedAt: &observed, RateLimitResetAt: &cooldown,
++		Extra: map[string]any{OpenAICodexQuotaCooldownExtraKey: map[string]any{
++			"limited_at": observed.Format(time.RFC3339Nano), "cooldown_until": cooldown.Format(time.RFC3339Nano),
++			"reset_at": reset.Format(time.RFC3339Nano), "explicit": explicit,
++		}},
++	}
++}
++
++func TestCodexPoolQuotaReset(t *testing.T) {
++	now := time.Now().UTC().Truncate(time.Second)
++	hour, twoHours, week := now.Add(time.Hour), now.Add(2*time.Hour), now.Add(7*24*time.Hour)
++	first := quotaTestAccount(1, now, hour, week, true)
++	second := quotaTestAccount(2, now, twoHours, twoHours, true)
++	ordinary429 := quotaTestAccount(3, now, now.Add(time.Minute), now.Add(time.Minute), false)
++	ordinary429.Extra = nil
++	available := Account{ID: 4, Platform: PlatformOpenAI, Status: StatusActive, Type: AccountTypeAPIKey, Schedulable: true}
++	expired := quotaTestAccount(5, now.Add(-time.Hour), now.Add(-time.Minute), now.Add(-time.Minute), true)
++	disable := quotaTestAccount(6, now, hour, hour, true)
++	disable.Schedulable = false
++	otherBlock := quotaTestAccount(7, now, hour, hour, true)
++	otherBlock.OverloadUntil = &twoHours
++	mismatched := quotaTestAccount(8, now, hour, hour, true)
++	mismatched.Credentials = map[string]any{"model_mapping": map[string]any{"different": "different"}}
++
++	groupID := int64(5)
++	tests := []struct {
++		name     string
++		accounts []Account
++		failed   map[int64]struct{}
++		want     time.Time
++	}{
++		{name: "earliest of effective deadlines", accounts: []Account{first, second}, want: twoHours},
++		{name: "ordinary 429 is infinity", accounts: []Account{ordinary429, second}, want: twoHours},
++		{name: "all ordinary 429", accounts: []Account{ordinary429}},
++		{name: "remaining candidate after budget exhausted", accounts: []Account{second, available}},
++		{name: "already attempted error without a reset", accounts: []Account{second, available}, failed: map[int64]struct{}{4: {}}, want: twoHours},
++		{name: "expired cooldown makes account available", accounts: []Account{second, expired}},
++		{name: "independent blockers and unsupported model", accounts: []Account{second, disable, otherBlock, mismatched}, want: twoHours},
++	}
++	for _, tc := range tests {
++		t.Run(tc.name, func(t *testing.T) {
++			s := &OpenAIGatewayService{accountRepo: &codexPoolQuotaAccounts{accounts: tc.accounts}}
++			got := s.EarliestCodexPoolQuotaReset(context.Background(), CodexPoolQuotaRequest{
++				GroupID: &groupID, Model: "gpt-5.1", Transport: OpenAIUpstreamTransportAny, FailedAccounts: tc.failed,
++			})
++			require.True(t, got.Equal(tc.want), "got %v, want %v", got, tc.want)
++		})
++	}
++}
++
++func TestCodexPoolQuotaFiltersExplicitImageSize(t *testing.T) {
++	now := time.Now().UTC().Truncate(time.Second)
++	early, late := now.Add(time.Hour), now.Add(2*time.Hour)
++	lowTier := quotaTestAccount(1, now, early, early, true)
++	lowTier.Extra[AccountExtraOpenAIImageSizeTiers] = []any{"1K"}
++	highTier := quotaTestAccount(2, now, late, late, true)
++	highTier.Extra[AccountExtraOpenAIImageSizeTiers] = []any{"4K"}
++	groupID := int64(5)
++	req := CodexPoolQuotaRequest{GroupID: &groupID, Model: "gpt-5.1", Transport: OpenAIUpstreamTransportAny}
++	for _, tc := range []struct {
++		name      string
++		size      string
++		lowUsable bool
++		want      time.Time
++	}{
++		{name: "4K ignores earlier 1K reset", size: "3840x2160", want: late},
++		{name: "4K ignores available 1K account", size: "3840x2160", lowUsable: true, want: late},
++		{name: "auto can use either tier", size: "auto", want: early},
++		{name: "unspecified text request can use either tier", want: early},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			first := lowTier
++			if tc.lowUsable {
++				first.RateLimitedAt, first.RateLimitResetAt = nil, nil
++			}
++			s := &OpenAIGatewayService{accountRepo: &codexPoolQuotaAccounts{accounts: []Account{first, highTier}}}
++			ctx := context.Background()
++			if tc.size != "" {
++				ctx = WithOpenAIImageSizeRouting(ctx, tc.size)
++			}
++			got := s.EarliestCodexPoolQuotaReset(ctx, req)
++			require.True(t, got.Equal(tc.want), "got %v, want %v", got, tc.want)
++		})
++	}
++}
++
++func TestCodexPoolQuotaUsesPersistedCooldownForRuntimeBlock(t *testing.T) {
++	now := time.Now().UTC().Truncate(time.Second)
++	past, early, late, localDeadline := now.Add(-time.Minute), now.Add(time.Hour), now.Add(2*time.Hour), now.Add(3*time.Hour)
++	groupID := int64(5)
++	req := CodexPoolQuotaRequest{GroupID: &groupID, Model: "gpt-5.1", Transport: OpenAIUpstreamTransportAny}
++	for _, tc := range []struct {
++		name     string
++		cooldown *time.Time
++		want     time.Time
++	}{
++		{name: "persisted cooldown cleared"},
++		{name: "persisted cooldown expired", cooldown: &past},
++		{name: "active persisted cooldown keeps the longer runtime block", cooldown: &early, want: late},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			first := quotaTestAccount(1, now, early, early, true)
++			first.RateLimitResetAt = tc.cooldown
++			second := quotaTestAccount(2, now, late, late, true)
++			s := &OpenAIGatewayService{accountRepo: &codexPoolQuotaAccounts{accounts: []Account{first, second}}}
++			s.BlockAccountScheduling(&first, localDeadline, "quota cooldown")
++			got := s.EarliestCodexPoolQuotaReset(context.Background(), req)
++			require.True(t, got.Equal(tc.want), "got %v, want %v", got, tc.want)
++			stored, ok := s.openaiAccountRuntimeBlockUntil.Load(first.ID)
++			require.True(t, ok, "diagnosis is read-only")
++			require.Equal(t, localDeadline, stored)
++		})
++	}
++}
++
++func TestCodexPoolQuotaUsageSnapshots(t *testing.T) {
++	now := time.Now().UTC().Truncate(time.Second)
++	short, long := now.Add(time.Hour), now.Add(24*time.Hour)
++	groupID := int64(5)
++	for _, tc := range []struct {
++		name        string
++		used5h      string
++		used7d      string
++		pause5h     float64
++		pause7d     float64
++		thresholds  map[string]int
++		hasCooldown bool
++		want        time.Time
++	}{
++		{name: "5h exhausted by snapshot alone", used5h: "100", used7d: "50", pause5h: 1, want: short},
++		{name: "both windows exhausted by snapshots alone", used5h: "100", used7d: "100", pause5h: 1, pause7d: 1, want: long},
++		{name: "7d exhaustion outlasts recorded 5h cooldown", used5h: "100", used7d: "100", hasCooldown: true, want: long},
++		{name: "early 7d pause with 5h exhaustion", used5h: "100", used7d: "95", pause5h: 1, pause7d: 0.9},
++		{name: "usage just below exhaustion", used5h: "99.99", used7d: "50", pause5h: 0.95},
++		{name: "scheduling threshold uses percentages", used5h: "100", used7d: "50", thresholds: map[string]int{PlatformOpenAI: 90}, want: short},
++		{name: "early 5h scheduling threshold with later 7d exhaustion", used5h: "95", used7d: "100", thresholds: map[string]int{PlatformOpenAI: 90}},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			snapshot := ParseCodexRateLimitHeaders(http.Header{
++				"X-Codex-Primary-Used-Percent": {tc.used5h}, "X-Codex-Primary-Window-Minutes": {"300"},
++				"X-Codex-Primary-Reset-After-Seconds": {"3600"},
++				"X-Codex-Secondary-Used-Percent":      {tc.used7d}, "X-Codex-Secondary-Window-Minutes": {"10080"},
++				"X-Codex-Secondary-Reset-After-Seconds": {"86400"},
++			})
++			require.NotNil(t, snapshot)
++			account := Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true}
++			if tc.hasCooldown {
++				account = quotaTestAccount(1, now, short, short, true)
++			}
++			extra := buildCodexUsageExtraUpdates(snapshot, now)
++			if tc.hasCooldown {
++				extra[OpenAICodexQuotaCooldownExtraKey] = account.Extra[OpenAICodexQuotaCooldownExtraKey]
++			}
++			extra["auto_pause_5h_threshold"] = tc.pause5h
++			extra["auto_pause_7d_threshold"] = tc.pause7d
++			account.Extra = extra
++			s := &OpenAIGatewayService{accountRepo: &codexPoolQuotaAccounts{accounts: []Account{account}}}
++			req := CodexPoolQuotaRequest{GroupID: &groupID, Model: "gpt-5.1", Transport: OpenAIUpstreamTransportAny}
++			if tc.thresholds != nil {
++				got, admissible := s.codexQuotaCandidateReset(context.Background(), &account, req, tc.thresholds, now)
++				require.False(t, admissible)
++				require.True(t, got.Equal(tc.want), "got %v, want %v", got, tc.want)
++				return
++			}
++			got := s.EarliestCodexPoolQuotaReset(context.Background(), req)
++			require.True(t, got.Equal(tc.want), "got %v, want %v", got, tc.want)
++		})
++	}
++}
++
++func TestCodexPoolQuotaProof(t *testing.T) {
++	now := time.Now().UTC().Truncate(time.Second)
++	short, long := now.Add(30*time.Minute), now.Add(time.Hour)
++	explicit := []byte(fmt.Sprintf(`{"error":{"type":"usage_limit_reached","resets_at":%d}}`, short.Unix()))
++	nested := []byte(fmt.Sprintf(`{"type":"response.failed","response":{"error":{"type":"usage_limit_reached","resets_at":%d}}}`, short.Unix()))
++	ordinary := []byte(fmt.Sprintf(`{"error":{"type":"rate_limit_exceeded","resets_at":%d}}`, short.Unix()))
++	account := quotaTestAccount(1, now, short, long, false)
++	headers := http.Header{
++		"X-Codex-Primary-Used-Percent": {"100"}, "X-Codex-Primary-Window-Minutes": {"300"}, "X-Codex-Primary-Reset-After-Seconds": {"1800"},
++		"X-Codex-Secondary-Used-Percent": {"100"}, "X-Codex-Secondary-Window-Minutes": {"10080"}, "X-Codex-Secondary-Reset-After-Seconds": {"3600"},
++	}
++
++	for _, tc := range []struct {
++		name    string
++		body    []byte
++		headers http.Header
++		want    time.Time
++	}{
++		{"explicit", explicit, nil, short},
++		{"SSE nested", nested, nil, short},
++		{"ordinary 429 with exhausted headers", ordinary, headers, time.Time{}},
++		{"both quota windows block", explicit, headers, long},
++		{"header-only exhausted windows", nil, headers, long},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			reset, _ := codexQuota429Reset(&account, tc.headers, tc.body, now)
++			require.True(t, reset.Equal(tc.want), "got %v, want %v", reset, tc.want)
++		})
++	}
++	headers.Set("x-codex-credits-unlimited", "true")
++	got, _ := codexQuota429Reset(&account, headers, nil, now)
++	require.True(t, got.IsZero())
++	got, _ = codexQuota429Reset(&account, nil, explicit, now)
++	require.True(t, got.Equal(short))
++
++	require.Equal(t, long, recordedCodexQuotaReset(&account, now))
++	account.Extra[openaiQuotaCreditsKey] = map[string]any{"credits": map[string]any{"balance": "0.01"}}
++	require.True(t, recordedCodexQuotaReset(&account, now).IsZero())
++	delete(account.Extra, openaiQuotaCreditsKey)
++	replacedGeneration := now.Add(time.Second)
++	account.RateLimitedAt = &replacedGeneration
++	require.True(t, recordedCodexQuotaReset(&account, now).IsZero())
++	account.RateLimitResetAt = nil
++	require.True(t, recordedCodexQuotaReset(&account, now).IsZero())
++}
++
++func TestCodexPoolQuotaIndependentWindowAndResetCredits(t *testing.T) {
++	now := time.Now().UTC().Truncate(time.Second)
++	reset := now.Add(time.Hour)
++	account := quotaTestAccount(1, now, reset, reset, true)
++	s := &OpenAIGatewayService{}
++	req := CodexPoolQuotaRequest{Model: "gpt-5.1"}
++	account.Extra[OpenAIAutoResetCreditStateExtraKey] = OpenAIAutoResetCreditState{
++		Status: OpenAIAutoResetStatusResetting, CheckedAt: now.Format(time.RFC3339),
++	}
++	got, admissible := s.codexQuotaCandidateReset(context.Background(), &account, req, nil, now)
++	require.False(t, admissible)
++	require.True(t, got.IsZero(), "a reset in progress has no known completion time")
++	account.Extra[OpenAIAutoResetCreditStateExtraKey] = OpenAIAutoResetCreditState{
++		Status: OpenAIAutoResetStatusNoCredit, CheckedAt: now.Format(time.RFC3339),
++	}
++	got, admissible = s.codexQuotaCandidateReset(context.Background(), &account, req, nil, now)
++	require.False(t, admissible)
++	require.True(t, got.Equal(reset), "a quota window still has a natural reset when no reset credits remain")
++
++	account.RateLimitResetAt = nil
++	setAccountModelRateLimitSnapshot(&account, "gpt-5.1", reset, openAICodexSparkQuotaReason, now)
++	got, admissible = s.codexQuotaCandidateReset(context.Background(), &account, req, nil, now)
++	require.False(t, admissible)
++	require.True(t, got.Equal(reset))
++	req.Model = "gpt-5.2"
++	got, admissible = s.codexQuotaCandidateReset(context.Background(), &account, req, nil, now)
++	require.True(t, admissible)
++	require.True(t, got.IsZero(), "a model-specific quota cannot affect another model")
++}
++
++func TestCodexPoolQuotaGuardianAffinityIsNotExclusive(t *testing.T) {
++	now := time.Now()
++	parent := quotaTestAccount(1, now, now.Add(time.Hour), now.Add(time.Hour), true)
++	other := Account{ID: 2, Platform: PlatformOpenAI, Status: StatusActive, Type: AccountTypeOAuth, Schedulable: true}
++	repo := &codexPoolQuotaAccounts{accounts: []Account{parent, other}}
++	s := &OpenAIGatewayService{
++		accountRepo: repo,
++		cache:       &stubGatewayCache{sessionBindings: map[string]int64{"openai:guardian-parent-session": parent.ID}},
++	}
++	groupID := int64(5)
++	ctx := context.WithValue(context.Background(), openAIGuardianParentAffinityContextKey{}, openAIGuardianParentAffinity{currentSessionHash: "guardian-parent-session"})
++	require.Equal(t, parent.ID, s.resolveOpenAIGuardianParentAccountID(ctx, &groupID))
++	require.True(t, s.EarliestCodexPoolQuotaReset(ctx, CodexPoolQuotaRequest{GroupID: &groupID, Model: "gpt-5.1", Transport: OpenAIUpstreamTransportAny}).IsZero())
++}
++
++func TestCodexPoolQuotaIncludesProxyQuarantineFailOpen(t *testing.T) {
++	now := time.Now()
++	early := now.Add(time.Hour)
++	late := now.Add(2 * time.Hour)
++	proxyID := int64(42)
++	quarantined := quotaTestAccount(1, now, early, early, true)
++	quarantined.ProxyID = &proxyID
++	availableViaQuarantinedProxy := Account{ID: 2, Platform: PlatformOpenAI, Status: StatusActive, Type: AccountTypeOAuth, Schedulable: true, ProxyID: &proxyID}
++	eligible := quotaTestAccount(3, now, late, late, true)
++	s := &OpenAIGatewayService{accountRepo: &codexPoolQuotaAccounts{accounts: []Account{quarantined, availableViaQuarantinedProxy, eligible}}}
++	s.openaiProxyStreamCircuit = newOpenAIProxyStreamCircuit(openAIProxyStreamCircuitSettings{
++		failureThreshold: 1, failureWindow: time.Minute, quarantineTTL: 3 * time.Hour, maxEntries: 16,
++	})
++	s.openaiProxyStreamCircuit.recordFailure(proxyID, now)
++	ctx := context.Background()
++	require.True(t, s.isOpenAIProxyStreamQuarantined(ctx, &availableViaQuarantinedProxy))
++
++	groupID := int64(5)
++	req := CodexPoolQuotaRequest{GroupID: &groupID, Model: "gpt-5.1", Transport: OpenAIUpstreamTransportAny,
++		FailedAccounts: map[int64]struct{}{eligible.ID: {}},
++	}
++	require.True(t, s.EarliestCodexPoolQuotaReset(ctx, req).IsZero(), "the untried account remains available through fail-open")
++
++	req.FailedAccounts[availableViaQuarantinedProxy.ID] = struct{}{}
++	reset := s.EarliestCodexPoolQuotaReset(ctx, req)
++	require.True(t, reset.Equal(early), "got %v, want %v", reset, early)
++}
+diff --git a/backend/internal/service/openai_compact_sse_keepalive.go b/backend/internal/service/openai_compact_sse_keepalive.go
+index c0aba9108..3ae409e90 100644
+--- a/backend/internal/service/openai_compact_sse_keepalive.go
++++ b/backend/internal/service/openai_compact_sse_keepalive.go
+@@ -56,7 +56,7 @@ func StartOpenAICompactSSEKeepalive(c *gin.Context, interval time.Duration) func
+ // 心跳字节由 OpenAICompactKeepaliveAdjustedWrittenSize 统一排除，因此不会污染
+ // "是否已向客户端写出语义响应"的 failover 判定（见 #3887）。
+ func startOpenAISSEKeepalive(c *gin.Context, interval time.Duration) func() {
+-	if c == nil || c.Writer == nil || interval <= 0 {
++	if c == nil || c.Writer == nil || interval <= 0 || deferCodexPoolQuotaHTTPCommit(c) {
+ 		return func() {}
+ 	}
+ 	originalWriter := c.Writer
+diff --git a/backend/internal/service/openai_gateway_passthrough.go b/backend/internal/service/openai_gateway_passthrough.go
+index bf3993d1c..48dbb5333 100644
+--- a/backend/internal/service/openai_gateway_passthrough.go
++++ b/backend/internal/service/openai_gateway_passthrough.go
+@@ -18,6 +18,7 @@ import (
+ 
+ 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
+ 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
++	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+ 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
+ 	"github.com/gin-gonic/gin"
+ 	"github.com/tidwall/gjson"
+@@ -1047,19 +1048,6 @@ func openAIStreamClientOutputStarted(c *gin.Context, localStarted bool) bool {
+ 	return OpenAICompactKeepaliveAdjustedWrittenSize(c) >= 0
+ }
+ 
+-// Lifecycle metadata and transport heartbeats are not model output.
+-func openAIStreamEventIsMetadata(eventType string) bool {
+-	switch strings.TrimSpace(eventType) {
+-	// Queuing and moderation metadata do not commit model output or disarm the
+-	// first-output timeout; a following overload must remain safe to retry.
+-	case "response.created", "response.queued", "response.in_progress", "response.metadata",
+-		"codex.rate_limits", "codex.response.metadata", "keepalive":
+-		return true
+-	default:
+-		return false
+-	}
+-}
+-
+ func openAIStreamAddedEventStartsClientOutput(payload []byte, eventType string) bool {
+ 	if len(payload) == 0 || !gjson.ValidBytes(payload) {
+ 		return true
+@@ -1171,7 +1159,7 @@ func openAIStreamDataStartsClientOutput(data, eventType string) bool {
+ 		value := gjson.Get(trimmed, field)
+ 		return value.Type != gjson.String || value.String() != ""
+ 	}
+-	return !openAIStreamEventIsMetadata(eventType)
++	return !openai.IsResponsesMetadataEvent(eventType)
+ }
+ 
+ func openAIStreamItemHasVisibleOutput(item gjson.Result) bool {
+@@ -1249,7 +1237,7 @@ func openAIStreamDataStartsSemanticTTFT(data, eventType string) bool {
+ 		payload := []byte(trimmed)
+ 		return !openAIStreamFailedEventShouldFailover(payload, extractOpenAISSEErrorMessage(payload))
+ 	default:
+-		return !openAIStreamEventIsMetadata(eventType)
++		return !openai.IsResponsesMetadataEvent(eventType)
+ 	}
+ }
+ 
+@@ -1388,7 +1376,7 @@ func openAIStreamFailedEventSemanticStatus(payload []byte, message string) int {
+ 		}
+ 	}
+ 	switch {
+-	case strings.Contains(combined, "rate_limit"):
++	case strings.Contains(combined, "rate_limit"), errType == "usage_limit_reached", code == "usage_limit_reached":
+ 		return http.StatusTooManyRequests
+ 	case strings.Contains(errType, "invalid_request"):
+ 		return http.StatusBadRequest
+diff --git a/backend/internal/service/openai_gateway_response_flush_test.go b/backend/internal/service/openai_gateway_response_flush_test.go
+index bfb49bde4..9ba4b9b8e 100644
+--- a/backend/internal/service/openai_gateway_response_flush_test.go
++++ b/backend/internal/service/openai_gateway_response_flush_test.go
+@@ -688,3 +688,38 @@ func TestOpenAIResponseFlush_TerminalEventEndsStreamWithoutEOF(t *testing.T) {
+ 	gotBody, _ := recorder.snapshot()
+ 	require.Equal(t, body, gotBody)
+ }
++
++func TestCodexPoolQuotaStreamRestoresKeepaliveAfterOutput(t *testing.T) {
++	gin.SetMode(gin.TestMode)
++	recorder := newOpenAIResponseFlushRecorder()
++	c, _ := gin.CreateTestContext(recorder)
++	req := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
++	c.Request = req.WithContext(WithCodexPoolQuotaHTTP(req.Context()))
++	reader, writer := io.Pipe()
++	t.Cleanup(func() { _ = writer.Close() })
++	svc := &OpenAIGatewayService{
++		cfg:           &config.Config{Gateway: config.GatewayConfig{StreamKeepaliveInterval: 1}},
++		toolCorrector: NewCodexToolCorrector(),
++	}
++	done := make(chan error, 1)
++	go func() {
++		resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: reader}
++		_, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth}, time.Now(), "gpt-5", "gpt-5")
++		done <- err
++	}()
++	select {
++	case <-recorder.flushEvents:
++		t.Fatal("a heartbeat committed the response before output")
++	case <-time.After(1200 * time.Millisecond):
++	}
++	const output = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n"
++	_, err := io.WriteString(writer, output)
++	require.NoError(t, err)
++	waitOpenAIResponseFlushCount(t, recorder, 2)
++	body, _ := recorder.snapshot()
++	require.Equal(t, output+":\n\n", body)
++	_, err = io.WriteString(writer, "data: [DONE]\n\n")
++	require.NoError(t, err)
++	require.NoError(t, writer.Close())
++	require.NoError(t, <-done)
++}
+diff --git a/backend/internal/service/openai_gateway_response_handling.go b/backend/internal/service/openai_gateway_response_handling.go
+index 72a0d4df6..071e551be 100644
+--- a/backend/internal/service/openai_gateway_response_handling.go
++++ b/backend/internal/service/openai_gateway_response_handling.go
+@@ -491,7 +491,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
+ 	// private until semantic output. The bytes do not count as client output.
+ 	keepaliveEventDirect := false
+ 	forwardsKeepaliveDirect := func(eventType string) bool {
+-		return eventType == "keepalive" && stageFirstOutput && !firstOutputStage.closed && !failureDelivered && !suppressCurrentEvent
++		return !deferCodexPoolQuotaHTTPCommit(c) && eventType == "keepalive" && stageFirstOutput && !firstOutputStage.closed && !failureDelivered && !suppressCurrentEvent
+ 	}
+ 	writeKeepaliveDirect := func(value string) {
+ 		if clientDisconnected {
+@@ -1053,6 +1053,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
+ 			if time.Since(lastDownstreamWriteAt) < keepaliveInterval {
+ 				continue
+ 			}
++			if stageFirstOutput && !w.Written() && deferCodexPoolQuotaHTTPCommit(c) {
++				continue
++			}
+ 			if stageFirstOutput {
+ 				// Bypass attempt-local buffered frames. The stable SSE headers may be
+ 				// committed here, but account headers remain private until semantic output.
+diff --git a/backend/internal/service/openai_gateway_scheduling.go b/backend/internal/service/openai_gateway_scheduling.go
+index 90728a3f9..84a5ed051 100644
+--- a/backend/internal/service/openai_gateway_scheduling.go
++++ b/backend/internal/service/openai_gateway_scheduling.go
+@@ -7,6 +7,7 @@ import (
+ 	"context"
+ 	"encoding/json"
+ 	"fmt"
++	"iter"
+ 	"log/slog"
+ 	"sort"
+ 	"strconv"
+@@ -387,6 +388,10 @@ func isOpenAICompatibleAccountEligibleForRequestBeforeProfit(ctx context.Context
+ }
+ 
+ func openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx context.Context, account *Account, platform string, requestedModel string, requireCompact bool, requiredCapability OpenAIEndpointCapability) string {
++	return openAICompatibleAccountEligibilityFailureReasonWithQuotaPause(ctx, account, platform, requestedModel, requireCompact, requiredCapability, true)
++}
++
++func openAICompatibleAccountEligibilityFailureReasonWithQuotaPause(ctx context.Context, account *Account, platform string, requestedModel string, requireCompact bool, requiredCapability OpenAIEndpointCapability, checkQuotaPause bool) string {
+ 	platform = NormalizeOpenAICompatiblePlatform(platform)
+ 	if account == nil {
+ 		return "account_nil"
+@@ -410,7 +415,7 @@ func openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx context.Con
+ 		}
+ 		return "not_schedulable"
+ 	}
+-	if account.IsOpenAI() {
++	if checkQuotaPause && account.IsOpenAI() {
+ 		if paused, reason := shouldAutoPauseOpenAIAccountByQuota(ctx, account); paused {
+ 			// Debug level: this fires per-candidate on the scheduling hot path, so Info
+ 			// would amplify into log spam once several accounts cross the threshold.
+@@ -531,61 +536,71 @@ func grokQuotaSnapshotStaleForPause(snapshot *xai.QuotaSnapshot, now time.Time)
+ }
+ 
+ func shouldAutoPauseOpenAIAccountByQuota(ctx context.Context, account *Account) (bool, openAIQuotaAutoPauseDecision) {
+-	if account == nil || !account.IsOpenAI() {
+-		return false, openAIQuotaAutoPauseDecision{}
+-	}
+-	// 自动用卡有独立阈值：达到消费阈值时必须先退出调度；仅达到普通暂停阈值时，
+-	// 只有新鲜状态明确存在可用卡才继续放行到消费阈值。
+-	if config := ResolveOpenAIAutoResetCreditConfig(account); config.Enabled {
+-		now := time.Now()
+-		utilization5h, has5h := resolveOpenAIQuotaUtilization(account.Extra, "5h", now)
+-		utilization7d, has7d := resolveOpenAIQuotaUtilization(account.Extra, "7d", now)
+-		if has5h && utilization5h >= config.Threshold5h {
++	for decision := range openAIAccountQuotaPauseDecisions(ctx, account, time.Now()) {
++		if decision.reason != "" {
+ 			notifyOpenAIAutoResetFromScheduler(account.ID)
+-			return true, openAIQuotaAutoPauseDecision{window: "5h", threshold: config.Threshold5h, utilization: utilization5h, reason: "quota_auto_reset_pending_5h"}
+-		}
+-		if has7d && utilization7d >= config.Threshold7d {
+-			notifyOpenAIAutoResetFromScheduler(account.ID)
+-			return true, openAIQuotaAutoPauseDecision{window: "7d", threshold: config.Threshold7d, utilization: utilization7d, reason: "quota_auto_reset_pending_7d"}
+ 		}
++		return true, decision
++	}
++	return false, openAIQuotaAutoPauseDecision{}
++}
+ 
+-		disabled5h := resolveAccountExtraBool(account.Extra, "auto_pause_5h_disabled")
+-		disabled7d := resolveAccountExtraBool(account.Extra, "auto_pause_7d_disabled")
++// openAIAccountQuotaPauseDecisions yields blockers in scheduler priority order.
++func openAIAccountQuotaPauseDecisions(ctx context.Context, account *Account, now time.Time) iter.Seq[openAIQuotaAutoPauseDecision] {
++	return func(yield func(openAIQuotaAutoPauseDecision) bool) {
++		if account == nil || !account.IsOpenAI() {
++			return
++		}
++		config := ResolveOpenAIAutoResetCreditConfig(account)
+ 		pause5h, pause7d := resolveOpenAIQuotaAutoPauseThresholds(ctx, account)
+-		pauseReached5h := !disabled5h && pause5h > 0 && has5h && utilization5h >= pause5h
+-		pauseReached7d := !disabled7d && pause7d > 0 && has7d && utilization7d >= pause7d
+-		if pauseReached5h || pauseReached7d {
+-			state := openAIAutoResetStateFromExtra(account.Extra)
+-			if state != nil && state.Status == OpenAIAutoResetStatusAvailable && state.AvailableCount > 0 && !openAIAutoResetStateStale(state, now) {
+-				return false, openAIQuotaAutoPauseDecision{}
+-			}
+-			notifyOpenAIAutoResetFromScheduler(account.ID)
+-			if pauseReached5h {
+-				return true, openAIQuotaAutoPauseDecision{window: "5h", threshold: pause5h, utilization: utilization5h, reason: "quota_auto_reset_credit_check_5h"}
++		windows := [...]struct {
++			name           string
++			pauseThreshold float64
++			resetThreshold float64
++			resetPending   bool
++		}{
++			{name: "5h", pauseThreshold: pause5h, resetThreshold: config.Threshold5h},
++			{name: "7d", pauseThreshold: pause7d, resetThreshold: config.Threshold7d},
++		}
++		// Automatic credit redemption has priority over ordinary quota pauses.
++		if config.Enabled {
++			for i := range windows {
++				window := &windows[i]
++				utilization, ok := resolveOpenAIQuotaUtilization(account.Extra, window.name, now)
++				if ok && utilization >= window.resetThreshold {
++					window.resetPending = true
++					if !yield(openAIQuotaAutoPauseDecision{
++						window: window.name, threshold: window.resetThreshold, utilization: utilization,
++						reason: "quota_auto_reset_pending_" + window.name,
++					}) {
++						return
++					}
++				}
+ 			}
+-			return true, openAIQuotaAutoPauseDecision{window: "7d", threshold: pause7d, utilization: utilization7d, reason: "quota_auto_reset_credit_check_7d"}
+-		}
+-	}
+-	// Per-account explicit-disable flags must take precedence over the global default.
+-	// Without these, leaving the account threshold blank means "use global default",
+-	// so an admin has no way to exempt a single account from auto-pause once a global
+-	// default exists. The disable flag is per-window so an account can opt out of
+-	// only 5h or only 7d auto-pause.
+-	disabled5h := resolveAccountExtraBool(account.Extra, "auto_pause_5h_disabled")
+-	disabled7d := resolveAccountExtraBool(account.Extra, "auto_pause_7d_disabled")
+-	threshold5h, threshold7d := resolveOpenAIQuotaAutoPauseThresholds(ctx, account)
+-	now := time.Now()
+-	if !disabled5h && threshold5h > 0 {
+-		if utilization, ok := resolveOpenAIQuotaUtilization(account.Extra, "5h", now); ok && utilization >= threshold5h {
+-			return true, openAIQuotaAutoPauseDecision{window: "5h", threshold: threshold5h, utilization: utilization}
+ 		}
+-	}
+-	if !disabled7d && threshold7d > 0 {
+-		if utilization, ok := resolveOpenAIQuotaUtilization(account.Extra, "7d", now); ok && utilization >= threshold7d {
+-			return true, openAIQuotaAutoPauseDecision{window: "7d", threshold: threshold7d, utilization: utilization}
++		for _, window := range windows {
++			// An explicit disable takes precedence over the global pause threshold.
++			if window.resetPending || window.pauseThreshold <= 0 ||
++				resolveAccountExtraBool(account.Extra, "auto_pause_"+window.name+"_disabled") {
++				continue
++			}
++			utilization, ok := resolveOpenAIQuotaUtilization(account.Extra, window.name, now)
++			if !(ok && utilization >= window.pauseThreshold) {
++				continue
++			}
++			decision := openAIQuotaAutoPauseDecision{window: window.name, threshold: window.pauseThreshold, utilization: utilization}
++			if config.Enabled {
++				state := openAIAutoResetStateFromExtra(account.Extra)
++				if state != nil && state.Status == OpenAIAutoResetStatusAvailable && state.AvailableCount > 0 && !openAIAutoResetStateStale(state, now) {
++					return
++				}
++				decision.reason = "quota_auto_reset_credit_check_" + window.name
++			}
++			if !yield(decision) {
++				return
++			}
+ 		}
+ 	}
+-	return false, openAIQuotaAutoPauseDecision{}
+ }
+ 
+ // resolveAccountExtraBool reads a bool-like value from account extra, tolerating
+diff --git a/backend/internal/service/openai_ws_forwarder.go b/backend/internal/service/openai_ws_forwarder.go
+index b5a466949..f86373d67 100644
+--- a/backend/internal/service/openai_ws_forwarder.go
++++ b/backend/internal/service/openai_ws_forwarder.go
+@@ -267,6 +267,10 @@ type OpenAIWSIngressHooks struct {
+ 	// that must be written into the upstream response.create frame.
+ 	MapRequestModel func(turn int, originalModel string) (string, error)
+ 	AfterTurn       func(turn int, result *OpenAIForwardResult, turnErr error)
++	// OnQuotaFailure may write a terminal quota event before semantic output.
++	// IndependentFollowUp indicates that the forwarded follow-up can run without
++	// its prior connection. Enabled reports the live group setting.
++	OnQuotaFailure func(turn int, independentFollowUp bool) (written, enabled bool)
+ }
+ 
+ func (s *OpenAIGatewayService) getOpenAIWSConnPool() *openAIWSConnPool {
+diff --git a/backend/internal/service/openai_ws_forwarder_ingress.go b/backend/internal/service/openai_ws_forwarder_ingress.go
+index e97faa44e..9d866b869 100644
+--- a/backend/internal/service/openai_ws_forwarder_ingress.go
++++ b/backend/internal/service/openai_ws_forwarder_ingress.go
+@@ -919,8 +919,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
+ 			)
+ 			var dialErr *openAIWSDialError
+ 			if errors.As(acquireErr, &dialErr) && dialErr != nil && dialErr.StatusCode == http.StatusTooManyRequests {
+-				s.persistOpenAIWSRateLimitSignal(ctx, account, dialErr.ResponseHeaders, nil, "rate_limit_exceeded", "rate_limit_error", strings.TrimSpace(acquireErr.Error()), canonicalModel)
+-				return nil, s.newOpenAIWSRateLimitFailoverError(account, dialErr.ResponseHeaders, nil, acquireErr.Error())
++				s.persistOpenAIWSHandshakeRateLimit(ctx, account, dialErr, canonicalModel)
++				return nil, s.newOpenAIWSRateLimitFailoverError(account, dialErr.ResponseHeaders, dialErr.ResponseBody, acquireErr.Error())
+ 			}
+ 			if errors.Is(acquireErr, errOpenAIWSPreferredConnUnavailable) {
+ 				return nil, NewOpenAIWSClientCloseError(
+@@ -975,6 +975,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
+ 		}
+ 		turnStart := time.Now()
+ 		wroteDownstream := false
++		wroteSemanticOutput := false
+ 		if err := lease.WriteJSONWithContextTimeout(ctx, json.RawMessage(payload), s.openAIWSWriteTimeout()); err != nil {
+ 			return nil, wrapOpenAIWSIngressTurnError(
+ 				"write_upstream",
+@@ -1051,12 +1052,15 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
+ 			if openAIWSMessageShouldParseUsage(eventType, upstreamMessage) {
+ 				parseOpenAIWSResponseUsageFromCompletedEvent(upstreamMessage, &usage)
+ 			}
++			var errCodeRaw, errTypeRaw, errMsgRaw string
++			isRateLimit := false
+ 			if eventType == "error" || eventType == "response.failed" {
+ 				markOpenAICyberPolicyEvent(c, upstreamMessage, http.StatusOK, &usage)
++				errCodeRaw, errTypeRaw, errMsgRaw = parseOpenAIWSErrorEventFields(upstreamMessage)
++				isRateLimit = isOpenAIWSRateLimitError(errCodeRaw, errTypeRaw, errMsgRaw)
+ 			}
+ 			if eventType == "error" {
+ 				s.handleOpenAIWSErrorEventTransientFailure(ctx, account, mappedModel, lease.HandshakeHeaders(), upstreamMessage)
+-				errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(upstreamMessage)
+ 				statusCode := openAIWSRejectedFieldRetryHTTPStatus(upstreamMessage)
+ 				if !wroteDownstream && statusCode == http.StatusBadRequest && rejectedFieldRetryState != nil {
+ 					retryBody, retryReason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(
+@@ -1081,7 +1085,6 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
+ 						}
+ 					}
+ 				}
+-				s.persistOpenAIWSRateLimitSignal(ctx, account, lease.HandshakeHeaders(), upstreamMessage, errCodeRaw, errTypeRaw, errMsgRaw, mappedModel)
+ 				fallbackReason, _ := classifyOpenAIWSErrorEventFromRaw(errCodeRaw, errTypeRaw, errMsgRaw)
+ 				if fallbackReason == openAIWSFallbackReasonInvalidEncryptedContent {
+ 					// 记录被上游拒绝的密文摘要；错误照旧透传，下一轮进场时按摘要预剥离。
+@@ -1151,9 +1154,27 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
+ 						false,
+ 					)
+ 				}
+-				if !wroteDownstream && isOpenAIWSRateLimitError(errCodeRaw, errTypeRaw, errMsgRaw) {
+-					lease.MarkBroken()
+-					return nil, s.newOpenAIWSRateLimitFailoverError(account, lease.HandshakeHeaders(), upstreamMessage, errMsgRaw)
++			}
++			if isRateLimit {
++				s.persistOpenAIWSEventRateLimit(ctx, account, lease.HandshakeHeaders(), upstreamMessage, errCodeRaw, errTypeRaw, errMsgRaw, mappedModel)
++				if !wroteSemanticOutput {
++					// Metadata permits a terminal error, but any downstream frame
++					// prevents replaying this request on another upstream connection.
++					if (turn > 1 || wroteDownstream) && hooks != nil && hooks.OnQuotaFailure != nil {
++						written, enabled := hooks.OnQuotaFailure(turn, turn > 1 && openAIWSQuotaRouteIndependent(payload))
++						if written {
++							lease.MarkBroken()
++							return nil, NewOpenAIWSClientCloseError(coderws.StatusNormalClosure, "", nil)
++						}
++						if enabled {
++							lease.MarkBroken()
++							return nil, NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "upstream rate limit exceeded; please reconnect", nil)
++						}
++					}
++					if !wroteDownstream {
++						lease.MarkBroken()
++						return nil, s.newOpenAIWSRateLimitFailoverError(account, lease.HandshakeHeaders(), upstreamMessage, errMsgRaw)
++					}
+ 				}
+ 			}
+ 			isTokenEvent := isOpenAIWSTokenEvent(eventType)
+@@ -1187,9 +1208,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
+ 				// ctx_pool 的 ingress 直写路径是唯一漏掉的一条 —— 同一个上游降载
+ 				// 事件在这里会让会话就地终止，切到 http_bridge 却能正常退避重试。
+ 				//
+-				// 必须写进独立变量而不是原地改 upstreamMessage：下面的
+-				// markOpenAIWSClientVisibleFailure 与 handleOpenAIWSTerminalTransientFailure
+-				// 仍要按未改写的原始 payload 判定账号状态，这正是
++				// 必须写进独立变量而不是原地改 upstreamMessage：下面记录客户端可见故障
++				// 和处理终止事件时仍要使用未改写的原始 payload，这正是
+ 				// sanitizeOpenAICapacityShedErrorCodeForClient 注释里写明的前提。
+ 				clientMessage := upstreamMessage
+ 				if eventType == "error" || eventType == "response.failed" {
+@@ -1218,11 +1238,15 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
+ 					}
+ 				} else {
+ 					wroteDownstream = true
++					wroteSemanticOutput = wroteSemanticOutput || !openai.IsResponsesMetadataEvent(eventType)
+ 					markOpenAIWSClientVisibleFailure(c, eventType, upstreamMessage)
+ 				}
+ 			}
+ 			if isTerminalEvent {
+-				terminalEvent := s.handleOpenAIWSTerminalTransientFailure(ctx, account, mappedModel, lease.HandshakeHeaders(), upstreamMessage)
++				terminalEvent := normalizeOpenAIWSTerminalEvent(eventType)
++				if terminalEvent == "response.failed" && !isRateLimit {
++					s.handleOpenAIWSFailureAccountSideEffects(ctx, account, mappedModel, lease.HandshakeHeaders(), upstreamMessage)
++				}
+ 				// 客户端已断连时，上游连接的 session 状态不可信，标记 broken 避免回池复用。
+ 				if clientDisconnected {
+ 					lease.MarkBroken()
+diff --git a/backend/internal/service/openai_ws_forwarder_logutil.go b/backend/internal/service/openai_ws_forwarder_logutil.go
+index 330ba33bb..a1fa08a76 100644
+--- a/backend/internal/service/openai_ws_forwarder_logutil.go
++++ b/backend/internal/service/openai_ws_forwarder_logutil.go
+@@ -215,11 +215,8 @@ func parseOpenAIWSResponseUsageFromCompletedEvent(message []byte, usage *OpenAIU
+ }
+ 
+ func parseOpenAIWSErrorEventFields(message []byte) (code string, errType string, errMessage string) {
+-	if len(message) == 0 {
+-		return "", "", ""
+-	}
+-	values := gjson.GetManyBytes(message, "error.code", "error.type", "error.message")
+-	return strings.TrimSpace(values[0].String()), strings.TrimSpace(values[1].String()), strings.TrimSpace(values[2].String())
++	errObj := openAIErrorObject(message)
++	return strings.TrimSpace(errObj.Get("code").String()), strings.TrimSpace(errObj.Get("type").String()), strings.TrimSpace(errObj.Get("message").String())
+ }
+ 
+ func summarizeOpenAIWSErrorEventFieldsFromRaw(codeRaw, errTypeRaw, errMessageRaw string) (code string, errType string, errMessage string) {
+diff --git a/backend/internal/service/openai_ws_forwarder_support.go b/backend/internal/service/openai_ws_forwarder_support.go
+index 704156f13..67be94f51 100644
+--- a/backend/internal/service/openai_ws_forwarder_support.go
++++ b/backend/internal/service/openai_ws_forwarder_support.go
+@@ -132,7 +132,7 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
+ 		if eventType == "error" {
+ 			errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(message)
+ 			prewarmModel, _ := reqBody["model"].(string)
+-			s.persistOpenAIWSRateLimitSignal(ctx, account, lease.HandshakeHeaders(), message, errCodeRaw, errTypeRaw, errMsgRaw, prewarmModel)
++			s.persistOpenAIWSEventRateLimit(ctx, account, lease.HandshakeHeaders(), message, errCodeRaw, errTypeRaw, errMsgRaw, prewarmModel)
+ 			errMsg := strings.TrimSpace(errMsgRaw)
+ 			if errMsg == "" {
+ 				errMsg = "OpenAI websocket prewarm error"
+@@ -687,7 +687,7 @@ func isOpenAIWSRateLimitError(codeRaw, errTypeRaw, msgRaw string) bool {
+ 	return false
+ }
+ 
+-func (s *OpenAIGatewayService) persistOpenAIWSRateLimitSignal(ctx context.Context, account *Account, headers http.Header, responseBody []byte, codeRaw, errTypeRaw, msgRaw string, canonicalModel ...string) {
++func (s *OpenAIGatewayService) persistOpenAIWSEventRateLimit(ctx context.Context, account *Account, headers http.Header, responseBody []byte, codeRaw, errTypeRaw, msgRaw string, canonicalModel ...string) {
+ 	if s == nil || s.rateLimitService == nil || account == nil || account.Platform != PlatformOpenAI {
+ 		return
+ 	}
+@@ -698,13 +698,16 @@ func (s *OpenAIGatewayService) persistOpenAIWSRateLimitSignal(ctx context.Contex
+ 	if model == "" {
+ 		model = firstNonEmpty(gjson.GetBytes(responseBody, "model").String(), gjson.GetBytes(responseBody, "response.model").String())
+ 	}
+-	// 非空 responseBody 表示已建立连接后收到的语义错误事件；握手响应头
+-	// 可能只是成功连接时的全局快照，不能用于普通模型的 429 账号级限流。
+-	// 实际拨号 HTTP 429 使用 nil responseBody，必须保留响应头。
+-	if len(responseBody) > 0 {
+-		headers = openAIWSSemantic429Headers(account, model, headers)
++	s.handleOpenAIAccountUpstreamError(ctx, account, http.StatusTooManyRequests, openAIWSSemantic429Headers(account, model, headers), responseBody, model)
++}
++
++// A rejected upgrade is an HTTP response. Its headers and body both belong to
++// the 429, unlike headers from a successful upgrade followed by a WS error.
++func (s *OpenAIGatewayService) persistOpenAIWSHandshakeRateLimit(ctx context.Context, account *Account, err *openAIWSDialError, model string) {
++	if s == nil || s.rateLimitService == nil || account == nil || account.Platform != PlatformOpenAI || err == nil || err.StatusCode != http.StatusTooManyRequests {
++		return
+ 	}
+-	s.handleOpenAIAccountUpstreamError(ctx, account, http.StatusTooManyRequests, headers, responseBody, model)
++	s.handleOpenAIAccountUpstreamError(ctx, account, err.StatusCode, err.ResponseHeaders, err.ResponseBody, model)
+ }
+ 
+ func openAIWSSemantic429Headers(account *Account, model string, headers http.Header) http.Header {
+diff --git a/backend/internal/service/openai_ws_forwarder_v2.go b/backend/internal/service/openai_ws_forwarder_v2.go
+index facff98ff..bbb8106b8 100644
+--- a/backend/internal/service/openai_ws_forwarder_v2.go
++++ b/backend/internal/service/openai_ws_forwarder_v2.go
+@@ -252,7 +252,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
+ 		)
+ 		var dialErr *openAIWSDialError
+ 		if errors.As(err, &dialErr) && dialErr != nil && dialErr.StatusCode == http.StatusTooManyRequests {
+-			s.persistOpenAIWSRateLimitSignal(ctx, account, dialErr.ResponseHeaders, nil, "rate_limit_exceeded", "rate_limit_error", strings.TrimSpace(err.Error()), mappedModel)
++			s.persistOpenAIWSHandshakeRateLimit(ctx, account, dialErr, mappedModel)
+ 		}
+ 		return nil, wrapOpenAIWSFallback(classifyOpenAIWSAcquireError(err), err)
+ 	}
+@@ -673,7 +673,7 @@ readLoop:
+ 		if eventType == "error" {
+ 			s.handleOpenAIWSErrorEventTransientFailure(ctx, account, mappedModel, lease.HandshakeHeaders(), message)
+ 			errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(message)
+-			s.persistOpenAIWSRateLimitSignal(ctx, account, lease.HandshakeHeaders(), message, errCodeRaw, errTypeRaw, errMsgRaw, mappedModel)
++			s.persistOpenAIWSEventRateLimit(ctx, account, lease.HandshakeHeaders(), message, errCodeRaw, errTypeRaw, errMsgRaw, mappedModel)
+ 			errMsg := strings.TrimSpace(errMsgRaw)
+ 			if errMsg == "" {
+ 				errMsg = "Upstream websocket error"
+diff --git a/backend/internal/service/openai_ws_ratelimit_signal_test.go b/backend/internal/service/openai_ws_ratelimit_signal_test.go
+index 13346cc46..df4342e34 100644
+--- a/backend/internal/service/openai_ws_ratelimit_signal_test.go
++++ b/backend/internal/service/openai_ws_ratelimit_signal_test.go
+@@ -579,3 +579,65 @@ func TestOpenAIWSRateLimitFailoverError_OAuthKeepsSameAccountDeadline(t *testing
+ 	require.True(t, apiKeyErr.SameAccountRetryDeadline.IsZero())
+ 	require.Zero(t, apiKeyErr.SameAccountRetryDelay)
+ }
++
++type codexQuotaUpgradeTestDialer struct {
++	url string
++}
++
++func (d codexQuotaUpgradeTestDialer) Dial(ctx context.Context, _ string, headers http.Header, _ string) (openAIWSClientConn, int, http.Header, error) {
++	return newDefaultOpenAIWSClientDialer().Dial(ctx, d.url, headers, "")
++}
++
++type codexQuotaUpgradeTestRepo struct {
++	openAIWSRateLimitSignalRepo
++	reset    time.Time
++	explicit bool
++}
++
++func (r *codexQuotaUpgradeTestRepo) SetCodexQuotaRateLimited(_ context.Context, _ int64, _ time.Time, reset time.Time, explicit bool) error {
++	r.reset, r.explicit = reset, explicit
++	return nil
++}
++
++func TestCodexPoolQuotaPersistsRejectedWebSocketUpgradeBody(t *testing.T) {
++	reset := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
++	body := `{"error":{"type":"usage_limit_reached","resets_at":` + strconv.FormatInt(reset.Unix(), 10) + `}}`
++	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
++		w.Header().Set("Content-Type", "application/json")
++		w.WriteHeader(http.StatusTooManyRequests)
++		_, _ = io.WriteString(w, body)
++	}))
++	defer upstream.Close()
++	dialer := codexQuotaUpgradeTestDialer{url: "ws" + strings.TrimPrefix(upstream.URL, "http")}
++	for _, mode := range []string{OpenAIWSIngressModeCtxPool, OpenAIWSIngressModePassthrough} {
++		t.Run(mode, func(t *testing.T) {
++			cfg := passthroughLifecycleConfig()
++			cfg.Gateway.OpenAIWS.OAuthEnabled = true
++			svc := newPassthroughLifecycleService(cfg, nil)
++			svc.openaiWSPassthroughDialer = dialer
++			svc.openaiWSPool = newOpenAIWSConnPool(cfg)
++			svc.openaiWSPool.setClientDialerForTest(dialer)
++			account := passthroughLifecycleAccount()
++			account.Type = AccountTypeOAuth
++			account.Extra = map[string]any{"openai_oauth_responses_websockets_v2_mode": mode}
++			repo := &codexQuotaUpgradeTestRepo{}
++			svc.accountRepo = repo
++			svc.rateLimitService = NewRateLimitService(repo, nil, cfg, nil, nil)
++			server, serverErr := startPassthroughLifecycleServer(t, context.Background(), svc, account)
++			defer server.Close()
++			conn := dialPassthroughLifecycleClient(t, server)
++			defer func() { _ = conn.CloseNow() }()
++			select {
++			case err := <-serverErr:
++				var failover *UpstreamFailoverError
++				require.ErrorAs(t, err, &failover)
++				require.Equal(t, http.StatusTooManyRequests, failover.StatusCode)
++				require.JSONEq(t, body, string(failover.ResponseBody))
++				require.True(t, repo.explicit)
++				require.True(t, repo.reset.Equal(reset), "got %v, want %v", repo.reset, reset)
++			case <-time.After(5 * time.Second):
++				t.Fatal("rejected upgrade did not finish")
++			}
++		})
++	}
++}
+diff --git a/backend/internal/service/openai_ws_v2/passthrough_relay.go b/backend/internal/service/openai_ws_v2/passthrough_relay.go
+index af3a57fcf..884f00911 100644
+--- a/backend/internal/service/openai_ws_v2/passthrough_relay.go
++++ b/backend/internal/service/openai_ws_v2/passthrough_relay.go
+@@ -15,6 +15,7 @@ import (
+ 	coderws "github.com/coder/websocket"
+ 	"github.com/tidwall/gjson"
+ 
++	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+ 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
+ )
+ 
+@@ -70,6 +71,15 @@ type RelayExit struct {
+ 	WroteDownstream bool
+ }
+ 
++// TurnOutput tracks how far a response has been exposed to the downstream.
++type TurnOutput uint32
++
++const (
++	TurnOutputNone TurnOutput = iota
++	TurnOutputMetadata
++	TurnOutputSemantic
++)
++
+ type RelayOptions struct {
+ 	WriteTimeout                    time.Duration
+ 	IdleTimeout                     time.Duration
+@@ -81,7 +91,7 @@ type RelayOptions struct {
+ 	StartClientAfterFirstDownstream bool
+ 	OnUsageParseFailure             func(eventType string, usageRaw string)
+ 	OnTurnComplete                  func(turn RelayTurnResult)
+-	BeforeWriteClient               func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) error
++	BeforeWriteClient               func(msgType coderws.MessageType, payload []byte, output TurnOutput) error
+ 	BeforeClientWrite               func(msgType coderws.MessageType, payload []byte)
+ 	AfterClientWrite                func(msgType coderws.MessageType, payload []byte, writeErr error)
+ 	BeforeRelayCancel               func(exit RelayExit)
+@@ -106,7 +116,7 @@ type RelayTraceEvent struct {
+ type relayState struct {
+ 	usage                   Usage
+ 	turnUsage               Usage
+-	turnWroteDownstream     atomic.Bool
++	turnOutput              atomic.Pointer[atomic.Uint32]
+ 	requestModelMu          sync.RWMutex
+ 	requestModel            string
+ 	pendingTurnStart        atomic.Pointer[time.Time]
+@@ -204,14 +214,15 @@ func Relay(
+ 		lastActivity.Store(nowFn().UnixNano())
+ 	}
+ 
++	state.turnOutput.Store(new(atomic.Uint32))
+ 	writeUpstream := func(msgType coderws.MessageType, payload []byte) error {
+ 		writeCtx, cancel := context.WithTimeout(relayCtx, writeTimeout)
+ 		defer cancel()
+ 		return upstreamConn.WriteFrame(writeCtx, msgType, payload)
+ 	}
+ 	writeClientFrameUpstream := func(msgType coderws.MessageType, payload []byte) error {
+-		isResponseCreate := isClientResponseCreateFrame(msgType, payload)
+-		if isResponseCreate {
++		var output *atomic.Uint32
++		if isClientResponseCreateFrame(msgType, payload) {
+ 			state.setRequestModel(strings.TrimSpace(gjson.GetBytes(payload, "model").String()))
+ 			turnStartedAt := time.Time{}
+ 			if options.TakeNextTurnStartedAt != nil {
+@@ -224,13 +235,14 @@ func Relay(
+ 			// The policy-enforcing client connection has accepted this turn.
+ 			// Reset before the write so an immediate upstream response cannot race
+ 			// with the transport returning from WriteFrame.
+-			state.turnWroteDownstream.Store(false)
++			output = new(atomic.Uint32)
++			state.turnOutput.Store(output)
+ 		}
+ 		err := writeUpstream(msgType, payload)
+-		if err != nil && isResponseCreate {
++		if err != nil && output != nil {
+ 			// The relay exits on this error, but retain the previous turn's state
+ 			// for accurate diagnostics while the two relay goroutines settle.
+-			state.turnWroteDownstream.Store(true)
++			output.Store(uint32(TurnOutputSemantic))
+ 		}
+ 		return err
+ 	}
+@@ -534,7 +546,7 @@ func runUpstreamToClient(
+ 	state *relayState,
+ 	onUsageParseFailure func(eventType string, usageRaw string),
+ 	onTurnComplete func(turn RelayTurnResult),
+-	beforeWriteClient func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) error,
++	beforeWriteClient func(msgType coderws.MessageType, payload []byte, output TurnOutput) error,
+ 	beforeClientWrite func(msgType coderws.MessageType, payload []byte),
+ 	afterClientWrite func(msgType coderws.MessageType, payload []byte, writeErr error),
+ 	afterWriteClient func(msgType coderws.MessageType, payload []byte),
+@@ -575,12 +587,11 @@ func runUpstreamToClient(
+ 			return
+ 		}
+ 		markActivity()
++		// Keep the state for this frame even if the client starts the next
++		// turn before WriteFrame returns to this goroutine.
++		output := state.turnOutput.Load()
+ 		if beforeWriteClient != nil {
+-			wroteDownstreamInTurn := wroteDownstream
+-			if state != nil {
+-				wroteDownstreamInTurn = state.turnWroteDownstream.Load()
+-			}
+-			if err := beforeWriteClient(msgType, payload, wroteDownstreamInTurn); err != nil {
++			if err := beforeWriteClient(msgType, payload, TurnOutput(output.Load())); err != nil {
+ 				emitRelayTrace(onTrace, RelayTraceEvent{
+ 					Stage:           "upstream_message_rejected",
+ 					Direction:       "upstream_to_client",
+@@ -598,9 +609,9 @@ func runUpstreamToClient(
+ 			}
+ 		}
+ 		observedEvent := observedUpstreamEvent{}
++		eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
+ 		switch msgType {
+ 		case coderws.MessageText:
+-			eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
+ 			if shouldFinalizePendingBareError(state, payload, eventType) {
+ 				emitTurnComplete(onTurnComplete, state, finalizePendingBareError(state, nowFn()))
+ 			}
+@@ -610,7 +621,7 @@ func runUpstreamToClient(
+ 			// terminal still settles relay lifecycle. Otherwise the pending-turn
+ 			// disconnect guard would turn an already-delivered terminal into a false
+ 			// missing-terminal failure when the upstream closes normally.
+-			if isTerminalEvent(strings.TrimSpace(gjson.GetBytes(payload, "type").String())) {
++			if isTerminalEvent(eventType) {
+ 				state.consumePendingTurnStartedAt()
+ 				openAIWSRelayDiscardActiveTurnTiming(state)
+ 			}
+@@ -658,8 +669,10 @@ func runUpstreamToClient(
+ 			return
+ 		}
+ 		wroteDownstream = true
+-		if state != nil {
+-			state.turnWroteDownstream.Store(true)
++		if msgType == coderws.MessageText && openai.IsResponsesMetadataEvent(eventType) {
++			output.CompareAndSwap(uint32(TurnOutputNone), uint32(TurnOutputMetadata))
++		} else {
++			output.Store(uint32(TurnOutputSemantic))
+ 		}
+ 		if afterWriteClient != nil {
+ 			afterWriteClient(msgType, payload)
+diff --git a/backend/internal/service/openai_ws_v2/passthrough_relay_test.go b/backend/internal/service/openai_ws_v2/passthrough_relay_test.go
+index 8186025ce..d279ee55c 100644
+--- a/backend/internal/service/openai_ws_v2/passthrough_relay_test.go
++++ b/backend/internal/service/openai_ws_v2/passthrough_relay_test.go
+@@ -947,7 +947,7 @@ func TestRelay_BeforeWriteClientTracksDownstreamPerTurn(t *testing.T) {
+ 	ctx, cancel := context.WithCancel(context.Background())
+ 	defer cancel()
+ 
+-	wroteStates := make(chan bool, 3)
++	wroteStates := make(chan TurnOutput, 3)
+ 	done := make(chan *RelayExit, 1)
+ 	stopErr := errors.New("stop after second-turn error")
+ 	go func() {
+@@ -956,8 +956,8 @@ func TestRelay_BeforeWriteClientTracksDownstreamPerTurn(t *testing.T) {
+ 			clientConn,
+ 			upstreamConn,
+ 			[]byte(`{"type":"response.create","model":"gpt-5.3-codex","input":[]}`),
+-			RelayOptions{BeforeWriteClient: func(_ coderws.MessageType, payload []byte, wroteDownstream bool) error {
+-				wroteStates <- wroteDownstream
++			RelayOptions{BeforeWriteClient: func(_ coderws.MessageType, payload []byte, output TurnOutput) error {
++				wroteStates <- output
+ 				if strings.Contains(string(payload), `"type":"error"`) {
+ 					return stopErr
+ 				}
+@@ -972,7 +972,7 @@ func TestRelay_BeforeWriteClientTracksDownstreamPerTurn(t *testing.T) {
+ 		msgType: coderws.MessageText,
+ 		payload: []byte(`{"type":"response.completed","response":{"id":"resp_first","usage":{"input_tokens":1,"output_tokens":1}}}`),
+ 	}
+-	require.False(t, <-wroteStates)
++	require.Equal(t, TurnOutputNone, <-wroteStates)
+ 	require.Eventually(t, func() bool { return len(clientConn.Writes()) == 1 }, time.Second, time.Millisecond)
+ 
+ 	clientConn.readCh <- passthroughTestFrame{
+@@ -980,11 +980,16 @@ func TestRelay_BeforeWriteClientTracksDownstreamPerTurn(t *testing.T) {
+ 		payload: []byte(`{"type":"response.create","model":"gpt-5.3-codex","input":[]}`),
+ 	}
+ 	require.Eventually(t, func() bool { return len(upstreamConn.Writes()) == 2 }, time.Second, time.Millisecond)
++	upstreamConn.readCh <- passthroughTestFrame{
++		msgType: coderws.MessageText,
++		payload: []byte(`{"type":"response.created","response":{"id":"resp_second"}}`),
++	}
++	require.Equal(t, TurnOutputNone, <-wroteStates, "the next turn must not inherit the first turn's output")
+ 	upstreamConn.readCh <- passthroughTestFrame{
+ 		msgType: coderws.MessageText,
+ 		payload: []byte(`{"type":"error","error":{"type":"usage_limit_reached"}}`),
+ 	}
+-	require.False(t, <-wroteStates, "the next turn must not inherit the first turn's downstream write")
++	require.Equal(t, TurnOutputMetadata, <-wroteStates)
+ 
+ 	select {
+ 	case relayExit := <-done:
+diff --git a/backend/internal/service/openai_ws_v2_passthrough_adapter.go b/backend/internal/service/openai_ws_v2_passthrough_adapter.go
+index e4c4bac0a..25980a0d7 100644
+--- a/backend/internal/service/openai_ws_v2_passthrough_adapter.go
++++ b/backend/internal/service/openai_ws_v2_passthrough_adapter.go
+@@ -903,8 +903,8 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
+ 		)
+ 		s.handleOpenAIWSDialTransientFailure(ctx, account, capturedSessionModel, dialErr)
+ 		if statusCode == http.StatusTooManyRequests {
+-			s.persistOpenAIWSRateLimitSignal(ctx, account, handshakeHeaders, nil, "rate_limit_exceeded", "rate_limit_error", strings.TrimSpace(err.Error()), capturedSessionModel)
+-			return s.newOpenAIWSRateLimitFailoverError(account, handshakeHeaders, nil, err.Error())
++			s.persistOpenAIWSHandshakeRateLimit(ctx, account, dialErr, capturedSessionModel)
++			return s.newOpenAIWSRateLimitFailoverError(account, handshakeHeaders, responseBody, err.Error())
+ 		}
+ 		return s.mapOpenAIWSPassthroughDialError(err, statusCode, handshakeHeaders)
+ 	}
+@@ -952,6 +952,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
+ 	}
+ 
+ 	completedTurns := atomic.Int32{}
++	var quotaRouteIndependent atomic.Bool
+ 	turnLifecycle := newOpenAIWSPassthroughTurnLifecycle(true)
+ 	var acceptedTurnStartedAt atomic.Pointer[time.Time]
+ 	clientFrameConn := &openAIWSClientFrameConn{
+@@ -1119,6 +1120,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
+ 			//     service_tier 时按 default 处理，billing 应如实反映。
+ 			if policyErr == nil && blocked == nil && isResponseCreate {
+ 				usageMeta.updateFromResponseCreate(out, model, requestModelForThisFrame)
++				if hooks != nil && hooks.OnQuotaFailure != nil {
++					quotaRouteIndependent.Store(openAIWSQuotaRouteIndependent(out))
++				}
+ 				_, actualModel := usageMeta.turnModels(requestModelForThisFrame)
+ 				SetOpsUpstreamModel(c, actualModel)
+ 				responseCreateAtCopy := responseCreateAt
+@@ -1283,7 +1287,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
+ 				_ = clientConn.Close(status, reason)
+ 				_ = clientConn.CloseNow()
+ 			},
+-			BeforeWriteClient: func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) error {
++			BeforeWriteClient: func(msgType coderws.MessageType, payload []byte, output openaiwsv2.TurnOutput) error {
+ 				if msgType != coderws.MessageText {
+ 					return nil
+ 				}
+@@ -1291,21 +1295,41 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
+ 				if eventType == "response.created" {
+ 					failureAccountSideEffectsApplied = false
+ 				}
+-				if (eventType == "error" || eventType == "response.failed") && markOpenAIWSV2PassthroughCyberPolicy(c, payload) {
++				if eventType != "error" && eventType != "response.failed" {
+ 					return nil
+ 				}
+-				errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(payload)
+-				isPreOutputRateLimit := eventType == "error" && !wroteDownstream && isOpenAIWSRateLimitError(errCodeRaw, errTypeRaw, errMsgRaw)
+-				if (eventType == "error" || eventType == "response.failed") && !failureAccountSideEffectsApplied && !isPreOutputRateLimit {
+-					failureAccountSideEffectsApplied = s.handleOpenAIWSFailureAccountSideEffects(ctx, account, capturedSessionModel, handshakeHeaders, payload)
++				if markOpenAIWSV2PassthroughCyberPolicy(c, payload) {
++					return nil
+ 				}
+-				if eventType != "error" {
++				errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(payload)
++				isRateLimit := isOpenAIWSRateLimitError(errCodeRaw, errTypeRaw, errMsgRaw)
++				if !isRateLimit || output == openaiwsv2.TurnOutputSemantic {
++					if !failureAccountSideEffectsApplied {
++						failureAccountSideEffectsApplied = s.handleOpenAIWSFailureAccountSideEffects(ctx, account, capturedSessionModel, handshakeHeaders, payload)
++					}
+ 					return nil
+ 				}
+-				if wroteDownstream || !isOpenAIWSRateLimitError(errCodeRaw, errTypeRaw, errMsgRaw) {
++				_, currentUpstreamModel := usageMeta.turnModels(capturedSessionModel)
++				if output != openaiwsv2.TurnOutputNone && !failureAccountSideEffectsApplied {
++					failureAccountSideEffectsApplied = s.handleOpenAIWSFailureAccountSideEffects(ctx, account, currentUpstreamModel, handshakeHeaders, payload)
++				}
++				if !failureAccountSideEffectsApplied || output == openaiwsv2.TurnOutputNone {
++					s.persistOpenAIWSEventRateLimit(ctx, account, handshakeHeaders, payload, errCodeRaw, errTypeRaw, errMsgRaw, currentUpstreamModel)
++				}
++				failureAccountSideEffectsApplied = true
++				completed := completedTurns.Load()
++				if (completed > 0 || output != openaiwsv2.TurnOutputNone) && hooks != nil && hooks.OnQuotaFailure != nil {
++					written, enabled := hooks.OnQuotaFailure(int(completed)+1, completed > 0 && quotaRouteIndependent.Load())
++					if written {
++						return NewOpenAIWSClientCloseError(coderws.StatusNormalClosure, "", nil)
++					}
++					if enabled && output != openaiwsv2.TurnOutputNone {
++						return NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "upstream rate limit exceeded; please reconnect", nil)
++					}
++				}
++				if output != openaiwsv2.TurnOutputNone {
+ 					return nil
+ 				}
+-				s.persistOpenAIWSRateLimitSignal(ctx, account, handshakeHeaders, payload, errCodeRaw, errTypeRaw, errMsgRaw, capturedSessionModel)
+ 				logOpenAIWSV2Passthrough(
+ 					"relay_rate_limit_failover account_id=%d err_code=%s err_type=%s err_message=%s",
+ 					account.ID,
+@@ -1313,7 +1337,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
+ 					truncateOpenAIWSLogValue(errTypeRaw, openAIWSLogValueMaxLen),
+ 					truncateOpenAIWSLogValue(errMsgRaw, openAIWSLogValueMaxLen),
+ 				)
+-				if completedTurns.Load() > 0 {
++				if completed > 0 {
+ 					return NewOpenAIWSClientCloseError(
+ 						coderws.StatusTryAgainLater,
+ 						"upstream rate limit exceeded; please reconnect",
+diff --git a/backend/internal/service/ratelimit_service.go b/backend/internal/service/ratelimit_service.go
+index c3cacf760..ec3a64f7f 100644
+--- a/backend/internal/service/ratelimit_service.go
++++ b/backend/internal/service/ratelimit_service.go
+@@ -1288,7 +1288,7 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
+ 		notifyOpenAIAutoReset(account.ID)
+ 		if resetAt := s.calculateOpenAI429ResetTime(headers); resetAt != nil {
+ 			s.notifyAccountSchedulingBlocked(account, *resetAt, "429")
+-			if err := s.accountRepo.SetRateLimited(ctx, account.ID, *resetAt); err != nil {
++			if err := s.setOpenAICodexRateLimited(ctx, account, *resetAt, headers, responseBody); err != nil {
+ 				slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
+ 				return
+ 			}
+@@ -1330,7 +1330,7 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
+ 			if resetAt := parseOpenAIRateLimitResetTime(responseBody); resetAt != nil {
+ 				resetTime := time.Unix(*resetAt, 0)
+ 				s.notifyAccountSchedulingBlocked(account, resetTime, "429")
+-				if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetTime); err != nil {
++				if err := s.setOpenAICodexRateLimited(ctx, account, resetTime, headers, responseBody); err != nil {
+ 					slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
+ 					return
+ 				}
+@@ -1365,7 +1365,7 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
+ 		}
+ 
+ 		// 其他平台：没有重置时间，使用可配置的秒级默认回避，避免误伤长时间不可调度。
+-		s.apply429FallbackRateLimit(ctx, account, "no_reset_time")
++		s.apply429FallbackRateLimitWithCodexEvidence(ctx, account, "no_reset_time", headers, responseBody)
+ 		return
+ 	}
+ 
+@@ -1397,6 +1397,10 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
+ }
+ 
+ func (s *RateLimitService) apply429FallbackRateLimit(ctx context.Context, account *Account, reason string) {
++	s.apply429FallbackRateLimitWithCodexEvidence(ctx, account, reason, nil, nil)
++}
++
++func (s *RateLimitService) apply429FallbackRateLimitWithCodexEvidence(ctx context.Context, account *Account, reason string, headers http.Header, body []byte) {
+ 	cooldown, enabled := s.get429FallbackCooldown(ctx, account)
+ 	if !enabled {
+ 		slog.Info("rate_limit_429_fallback_ignored", "account_id", account.ID, "platform", account.Platform, "reason", reason)
+@@ -1406,7 +1410,7 @@ func (s *RateLimitService) apply429FallbackRateLimit(ctx context.Context, accoun
+ 	resetAt := time.Now().Add(cooldown)
+ 	slog.Warn("rate_limit_429_fallback_used", "account_id", account.ID, "platform", account.Platform, "reason", reason, "using_default", cooldown.String())
+ 	s.notifyAccountSchedulingBlocked(account, resetAt, "429_fallback")
+-	if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetAt); err != nil {
++	if err := s.setOpenAICodexRateLimited(ctx, account, resetAt, headers, body); err != nil {
+ 		slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
+ 	}
+ }
+@@ -1883,7 +1887,19 @@ func (s *RateLimitService) persistOpenAICodexSnapshot(ctx context.Context, accou
+ 	notifyOpenAIAutoReset(account.ID)
+ }
+ 
+-// parseOpenAIRateLimitResetTime 解析 OpenAI 兼容格式的 429 响应，返回重置时间的 Unix 时间戳
++// openAIErrorObject reads both HTTP/WS errors and nested Responses terminal errors.
++func openAIErrorObject(body []byte) gjson.Result {
++	errObj := gjson.GetBytes(body, "error")
++	if errObj.Get("type").String() == "" {
++		nested := gjson.GetBytes(body, "response.error")
++		if nested.IsObject() && (nested.Get("type").String() != "" || errObj.Get("code").String() == "") {
++			return nested
++		}
++	}
++	return errObj
++}
++
++// parseOpenAIRateLimitResetTime 解析 OpenAI 兼容格式的 429 响应或 response.failed 事件，返回重置时间的 Unix 时间戳
+ // OpenAI 的 usage_limit_reached 错误格式：
+ //
+ //	{
+@@ -1895,40 +1911,37 @@ func (s *RateLimitService) persistOpenAICodexSnapshot(ctx context.Context, accou
+ //	  }
+ //	}
+ func parseOpenAIRateLimitResetTime(body []byte) *int64 {
+-	var parsed map[string]any
+-	if err := json.Unmarshal(body, &parsed); err != nil {
+-		return nil
+-	}
+-
+-	errObj, ok := parsed["error"].(map[string]any)
+-	if !ok {
++	if !gjson.ValidBytes(body) {
+ 		return nil
+ 	}
++	errObj := openAIErrorObject(body)
+ 
+ 	// 检查是否为已知的账号用量限制类型。
+-	errType, _ := errObj["type"].(string)
++	errType := errObj.Get("type").String()
+ 	if errType != "usage_limit_reached" && errType != "rate_limit_exceeded" && errType != "GoUsageLimitError" {
+ 		return nil
+ 	}
+ 
+ 	// 优先使用 resets_at（Unix 时间戳）
+-	if resetsAt, ok := errObj["resets_at"].(float64); ok {
+-		ts := int64(resetsAt)
++	resetsAt := errObj.Get("resets_at")
++	switch resetsAt.Type {
++	case gjson.Number:
++		ts := int64(resetsAt.Num)
+ 		return &ts
+-	}
+-	if resetsAt, ok := errObj["resets_at"].(string); ok {
+-		if ts, err := strconv.ParseInt(resetsAt, 10, 64); err == nil {
++	case gjson.String:
++		if ts, err := strconv.ParseInt(resetsAt.Str, 10, 64); err == nil {
+ 			return &ts
+ 		}
+ 	}
+ 
+ 	// 如果没有 resets_at，尝试使用 resets_in_seconds
+-	if resetsInSeconds, ok := errObj["resets_in_seconds"].(float64); ok {
+-		ts := time.Now().Unix() + int64(resetsInSeconds)
++	resetsInSeconds := errObj.Get("resets_in_seconds")
++	switch resetsInSeconds.Type {
++	case gjson.Number:
++		ts := time.Now().Unix() + int64(resetsInSeconds.Num)
+ 		return &ts
+-	}
+-	if resetsInSeconds, ok := errObj["resets_in_seconds"].(string); ok {
+-		if sec, err := strconv.ParseInt(resetsInSeconds, 10, 64); err == nil {
++	case gjson.String:
++		if sec, err := strconv.ParseInt(resetsInSeconds.Str, 10, 64); err == nil {
+ 			ts := time.Now().Unix() + sec
+ 			return &ts
+ 		}
+@@ -1937,7 +1950,7 @@ func parseOpenAIRateLimitResetTime(body []byte) *int64 {
+ 	// OpenCode Go subscriptions expose the reset only in a human-readable message,
+ 	// for example: "Weekly usage limit reached. Resets in 2 days."
+ 	if errType == "GoUsageLimitError" {
+-		message, _ := errObj["message"].(string)
++		message := errObj.Get("message").Str
+ 		if resetAfter := parseOpenCodeGoUsageLimitResetDuration(message); resetAfter > 0 {
+ 			ts := time.Now().Add(resetAfter).Unix()
+ 			return &ts
+@@ -2498,7 +2511,12 @@ func (s *RateLimitService) HandleOpenAICodexSparkRateLimit(ctx context.Context,
+ 		reset := now.Add(cooldown)
+ 		resetAt = &reset
+ 	}
+-	if err := s.accountRepo.SetModelRateLimit(ctx, account.ID, modelKey, *resetAt, openAICodexSparkRateLimitReason); err != nil {
++	reason := openAICodexSparkRateLimitReason
++	if quotaReset, _ := codexQuota429Reset(account, headers, responseBody, now); !quotaReset.IsZero() &&
++		(disposition == openAIOAuth429Quota5h || disposition == openAIOAuth429Quota7d) && quotaReset.Sub(*resetAt) < time.Second {
++		reason = openAICodexSparkQuotaReason
++	}
++	if err := s.accountRepo.SetModelRateLimit(ctx, account.ID, modelKey, *resetAt, reason); err != nil {
+ 		slog.Warn("openai_codex_spark_model_rate_limit_set_failed", "account_id", account.ID, "model", modelKey, "error", err)
+ 	}
+ 	slog.Info("openai_codex_spark_model_rate_limited", "account_id", account.ID, "model", modelKey, "reset_at", *resetAt)
+diff --git a/backend/migrations/253_group_openai_codex_pool_quota_error.sql b/backend/migrations/253_group_openai_codex_pool_quota_error.sql
+new file mode 100644
+index 000000000..c897faa4f
+--- /dev/null
++++ b/backend/migrations/253_group_openai_codex_pool_quota_error.sql
+@@ -0,0 +1,2 @@
++ALTER TABLE groups
++    ADD COLUMN IF NOT EXISTS openai_codex_pool_quota_error_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+diff --git a/frontend/src/i18n/locales/en/admin/overview.ts b/frontend/src/i18n/locales/en/admin/overview.ts
+index 250c91163..ff960fc25 100644
+--- a/frontend/src/i18n/locales/en/admin/overview.ts
++++ b/frontend/src/i18n/locales/en/admin/overview.ts
+@@ -1269,6 +1269,10 @@ export default {
+         unsupportedMessage: 'This Sub2API server cannot generate the required Live attestation. Live will not work even if enabled. Continue anyway?',
+         enableAnyway: 'Enable anyway'
+       },
++      codexPoolQuotaError: {
++        label: 'Show Codex quota reset time',
++        hint: 'When the pool is unavailable, report the earliest known quota reset to Codex. Waiting for an account or the first response may delay HTTP streaming heartbeats.',
++      },
+       openaiFast: {
+         title: 'OpenAI Fast mode',
+         force: 'Force Fast (priority)',
+diff --git a/frontend/src/i18n/locales/zh/admin/overview.ts b/frontend/src/i18n/locales/zh/admin/overview.ts
+index 5386e7c5a..c285ff35a 100644
+--- a/frontend/src/i18n/locales/zh/admin/overview.ts
++++ b/frontend/src/i18n/locales/zh/admin/overview.ts
+@@ -1267,6 +1267,10 @@ export default {
+         unsupportedMessage: '当前 Sub2API 服务端无法生成 Live 所需的设备证明，即使开启也不能使用。是否仍然开启？',
+         enableAnyway: '仍然开启'
+       },
++      codexPoolQuotaError: {
++        label: '向 Codex 返回额度恢复时间',
++        hint: '账号池不可用时，向 Codex 返回最早已知的额度恢复时间。等待账号或首个响应时，HTTP 流式心跳可能延后。',
++      },
+       openaiFast: {
+         title: 'OpenAI Fast 模式',
+         force: '强制使用 Fast（priority）',
+diff --git a/frontend/src/types/index.ts b/frontend/src/types/index.ts
+index 21ffc9303..fbe0f6dcc 100644
+--- a/frontend/src/types/index.ts
++++ b/frontend/src/types/index.ts
+@@ -644,6 +644,7 @@ export interface AdminGroup extends Group {
+   i18n?: GroupI18n
+   force_openai_fast: boolean
+   force_openai_ultrafast: boolean
++  openai_codex_pool_quota_error_enabled?: boolean
+   free_openai_fast: boolean
+   model_pricing: import('@/api/admin/channels').ChannelModelPricing[]
+   // 分组利润控制（openai/anthropic/gemini/grok/antigravity 分组可启用；margin/buffer 为小数存储）。
+@@ -820,6 +821,7 @@ export interface CreateGroupRequest {
+   long_context_pricing_enabled?: boolean
+   force_openai_fast?: boolean
+   force_openai_ultrafast?: boolean
++  openai_codex_pool_quota_error_enabled?: boolean
+   free_openai_fast?: boolean
+   model_pricing?: import('@/api/admin/channels').ChannelModelPricing[]
+   allow_image_generation?: boolean
+@@ -889,6 +891,7 @@ export interface UpdateGroupRequest {
+   long_context_pricing_enabled?: boolean
+   force_openai_fast?: boolean
+   force_openai_ultrafast?: boolean
++  openai_codex_pool_quota_error_enabled?: boolean
+   free_openai_fast?: boolean
+   model_pricing?: import('@/api/admin/channels').ChannelModelPricing[]
+   allow_image_generation?: boolean
+diff --git a/frontend/src/views/admin/GroupsView.vue b/frontend/src/views/admin/GroupsView.vue
+index 00572d47e..f0e2058b3 100644
+--- a/frontend/src/views/admin/GroupsView.vue
++++ b/frontend/src/views/admin/GroupsView.vue
+@@ -1620,6 +1620,25 @@
+           </p>
+         </div>
+ 
++        <div
++          v-if="createForm.platform === 'openai' || createForm.platform === 'composite'"
++          class="border-t border-gray-200 dark:border-dark-400 pt-4 mt-4"
++        >
++          <div class="flex items-center justify-between gap-4">
++            <label class="text-sm text-gray-600 dark:text-gray-400">
++              {{ t("admin.groups.codexPoolQuotaError.label") }}
++            </label>
++            <Toggle
++              data-testid="create-codex-pool-quota-error"
++              :aria-label="t('admin.groups.codexPoolQuotaError.label')"
++              v-model="createForm.openai_codex_pool_quota_error_enabled"
++            />
++          </div>
++          <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
++            {{ t("admin.groups.codexPoolQuotaError.hint") }}
++          </p>
++        </div>
++
+         <!-- Codex Live 开关（OpenAI 与 Composite 平台） -->
+         <div
+           v-if="supportsLivePlatform(createForm.platform)"
+@@ -3297,6 +3316,25 @@
+           </p>
+         </div>
+ 
++        <div
++          v-if="editForm.platform === 'openai' || editForm.platform === 'composite'"
++          class="border-t border-gray-200 dark:border-dark-400 pt-4 mt-4"
++        >
++          <div class="flex items-center justify-between gap-4">
++            <label class="text-sm text-gray-600 dark:text-gray-400">
++              {{ t("admin.groups.codexPoolQuotaError.label") }}
++            </label>
++            <Toggle
++              data-testid="edit-codex-pool-quota-error"
++              :aria-label="t('admin.groups.codexPoolQuotaError.label')"
++              v-model="editForm.openai_codex_pool_quota_error_enabled"
++            />
++          </div>
++          <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
++            {{ t("admin.groups.codexPoolQuotaError.hint") }}
++          </p>
++        </div>
++
+         <!-- Codex Live 开关（OpenAI 与 Composite 平台） -->
+         <div
+           v-if="supportsLivePlatform(editForm.platform)"
+@@ -5012,6 +5050,7 @@ const createForm = reactive({
+   long_context_pricing_enabled: true,
+   force_openai_fast: false,
+   force_openai_ultrafast: false,
++  openai_codex_pool_quota_error_enabled: false,
+   free_openai_fast: false,
+   model_pricing: [] as PricingFormEntry[],
+   // 图片生成计费配置
+@@ -5380,6 +5419,7 @@ const editForm = reactive({
+   long_context_pricing_enabled: true,
+   force_openai_fast: false,
+   force_openai_ultrafast: false,
++  openai_codex_pool_quota_error_enabled: false,
+   free_openai_fast: false,
+   model_pricing: [] as PricingFormEntry[],
+   // 图片生成计费配置
+@@ -5873,6 +5913,7 @@ const closeCreateModal = () => {
+   createForm.long_context_pricing_enabled = true;
+   createForm.force_openai_fast = false;
+   createForm.force_openai_ultrafast = false;
++  createForm.openai_codex_pool_quota_error_enabled = false;
+   createForm.free_openai_fast = false;
+   createForm.model_pricing = [];
+   createForm.web_search_price_per_call = null;
+@@ -6003,6 +6044,10 @@ const handleCreateGroup = async () => {
+         createForm.platform,
+         createForm.force_openai_ultrafast,
+       ),
++      openai_codex_pool_quota_error_enabled: normalizeGroupOpenAIFast(
++        createForm.platform,
++        createForm.openai_codex_pool_quota_error_enabled,
++      ),
+       free_openai_fast: normalizeGroupOpenAIFast(
+         createForm.platform,
+         createForm.free_openai_fast,
+@@ -6153,6 +6198,7 @@ const handleEdit = async (group: AdminGroup) => {
+     group.long_context_pricing_enabled ?? true;
+   editForm.force_openai_fast = group.force_openai_fast ?? false;
+   editForm.force_openai_ultrafast = group.force_openai_ultrafast ?? false;
++  editForm.openai_codex_pool_quota_error_enabled = group.openai_codex_pool_quota_error_enabled ?? false;
+   editForm.free_openai_fast = group.free_openai_fast ?? false;
+   editForm.model_pricing = groupPricingFromAPI(group.model_pricing);
+   editForm.allow_image_generation = group.allow_image_generation ?? false;
+@@ -6289,6 +6335,7 @@ const closeEditModal = () => {
+   editForm.long_context_pricing_enabled = true;
+   editForm.force_openai_fast = false;
+   editForm.force_openai_ultrafast = false;
++  editForm.openai_codex_pool_quota_error_enabled = false;
+   editForm.free_openai_fast = false;
+   editForm.model_pricing = [];
+   editForm.web_search_price_per_call = null;
+@@ -6353,6 +6400,10 @@ const handleUpdateGroup = async () => {
+         editForm.platform,
+         editForm.force_openai_ultrafast,
+       ),
++      openai_codex_pool_quota_error_enabled: normalizeGroupOpenAIFast(
++        editForm.platform,
++        editForm.openai_codex_pool_quota_error_enabled,
++      ),
+       free_openai_fast: normalizeGroupOpenAIFast(
+         editForm.platform,
+         editForm.free_openai_fast,
+diff --git a/frontend/src/views/admin/__tests__/GroupsView.openaiForcedTier.spec.ts b/frontend/src/views/admin/__tests__/GroupsView.openaiForcedTier.spec.ts
+index 6d4e7fd40..71e3f1886 100644
+--- a/frontend/src/views/admin/__tests__/GroupsView.openaiForcedTier.spec.ts
++++ b/frontend/src/views/admin/__tests__/GroupsView.openaiForcedTier.spec.ts
+@@ -228,7 +228,7 @@ const submit = async (wrapper: ReturnType<typeof mountView>) => {
+   return updateGroup.mock.calls[0][1];
+ };
+ 
+-describe("GroupsView OpenAI forced service tier", () => {
++describe("GroupsView OpenAI routing settings", () => {
+   beforeEach(() => {
+     localStorage.clear();
+     listGroups.mockReset();
+@@ -323,4 +323,51 @@ describe("GroupsView OpenAI forced service tier", () => {
+ 
+     wrapper.unmount();
+   });
++  it("defaults the pool quota error off for old groups and saves opt-in", async () => {
++    const wrapper = await openEditDialog(sourceGroup);
++    const quotaToggle = wrapper.get('[data-testid="edit-codex-pool-quota-error"]');
++    expect(quotaToggle.attributes("aria-checked")).toBe("false");
++    await quotaToggle.trigger("click");
++    expect(await submit(wrapper)).toMatchObject({
++      openai_codex_pool_quota_error_enabled: true,
++    });
++    wrapper.unmount();
++  });
++
++  it("loads the enabled pool quota error and saves explicit opt-out", async () => {
++    const wrapper = await openEditDialog({
++      ...sourceGroup,
++      openai_codex_pool_quota_error_enabled: true,
++    });
++    const quotaToggle = wrapper.get('[data-testid="edit-codex-pool-quota-error"]');
++    expect(quotaToggle.attributes("aria-checked")).toBe("true");
++    await quotaToggle.trigger("click");
++    expect(await submit(wrapper)).toMatchObject({
++      openai_codex_pool_quota_error_enabled: false,
++    });
++    wrapper.unmount();
++  });
++
++  it("can opt into pool quota errors when creating an OpenAI group", async () => {
++    listGroups.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20, pages: 1 });
++    createGroup.mockResolvedValue({ id: 50, platform: "openai" });
++    const wrapper = mountView();
++    await flushPromises();
++    await wrapper.get('[data-tour="groups-create-btn"]').trigger("click");
++    const platform = wrapper.getComponent('[data-tour="group-form-platform"]');
++    platform.vm.$emit("update:modelValue", "openai");
++    await flushPromises();
++    await wrapper.get('input[data-tour="group-form-name"]').setValue("New pool");
++    const quotaToggle = wrapper.get('[data-testid="create-codex-pool-quota-error"]');
++    expect(quotaToggle.attributes("aria-checked")).toBe("false");
++    await quotaToggle.trigger("click");
++    await wrapper.get("#create-group-form").trigger("submit");
++    await flushPromises();
++    expect(createGroup).toHaveBeenCalledWith(expect.objectContaining({
++      platform: "openai",
++      openai_codex_pool_quota_error_enabled: true,
++    }));
++    wrapper.unmount();
++  });
++
+ });

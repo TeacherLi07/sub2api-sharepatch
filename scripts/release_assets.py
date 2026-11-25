@@ -14,6 +14,14 @@ VERSION_PATTERN = re.compile(r"\d+\.\d+\.\d+-share\.\d+(?:-preview\.\d+\.\d+)?")
 DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}")
 
 
+def codex_quota_manifest() -> dict:
+    source = Path(__file__).resolve().parents[1] / "customizations/codex-pool-quota"
+    manifest = json.loads((source / "manifest.json").read_text())
+    if sha256(source / "pr-9024.patch") != manifest["patch_sha256"]:
+        raise ValueError("Codex quota patch SHA256 does not match its source manifest")
+    return manifest
+
+
 def normalize_version(value: str) -> str:
     version = value.removeprefix("v")
     if not VERSION_PATTERN.fullmatch(version):
@@ -61,6 +69,7 @@ def validate_metadata(metadata: dict, version: str, repo: str, upstream_sha: str
         "targets": ["linux/amd64"],
         "archive": archive_name(version),
         "image_repository": "ghcr.io/" + repo.lower(),
+        "codex_pool_quota_patch": codex_quota_manifest(),
     }
     if any(metadata.get(key) != value for key, value in expected.items()):
         raise ValueError("release provenance does not match the selected source/version")

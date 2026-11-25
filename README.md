@@ -1,6 +1,6 @@
 # sub2api-sharepatch
 
-此仓库为 Sub2API 上游正式版维护两层可独立应用的补丁。PR CI、定时和手动发布都会解析上游最新正式 Release 的 tag 与 commit SHA，并在一次运行中固定使用该 SHA 完成检出、补丁应用、测试和构建。
+此仓库为 Sub2API 上游正式版维护共享账单、Codex 教程定制及待上游合并的 Codex 额度恢复补丁。PR CI、定时和手动发布都会解析上游最新正式 Release 的 tag 与 commit SHA，并在一次运行中固定使用该 SHA 完成检出、补丁应用、测试和构建。
 
 CI 与发布使用该固定提交的 `backend/go.mod` 指定的 Go 版本；源码 Docker 构建保留上游的 Go 镜像版本，避免上游升级工具链后旧版本补丁阻断发布。
 
@@ -20,6 +20,9 @@ printf 'Using upstream release %s (%s)\n' "$UPSTREAM_RELEASE_TAG" "$UPSTREAM_REL
 git clone https://github.com/Wei-Shaw/sub2api.git ../sub2api-upstream
 git -C ../sub2api-upstream checkout --detach "$UPSTREAM_RELEASE_SHA"
 
+python3 scripts/apply-codex-pool-quota.py \
+  --upstream ../sub2api-upstream \
+  --upstream-sha "$UPSTREAM_RELEASE_SHA"
 python3 scripts/apply-overlay.py \
   --upstream ../sub2api-upstream \
   --upstream-sha "$UPSTREAM_RELEASE_SHA" \
@@ -32,13 +35,21 @@ cd ../sub2api-upstream/backend/cmd/server
 go run -mod=mod github.com/google/wire/cmd/wire
 ```
 
-两个脚本都会要求明确传入 SHA，并拒绝工作树 SHA 不匹配或缺失唯一锚点的源码。只需要共享账单功能时，只运行 `apply-overlay.py`；Codex 教程定制由第二个脚本独立应用。目标工作树应保持干净；`.work/` 是本地测试数据，不会提交到补丁仓库。
+三个脚本都要求明确传入 SHA，并拒绝工作树 SHA 不匹配的源码。额度补丁必须最先应用，要求干净的临时检出；其后依次应用共享账单与教程定制，最后生成 Wire。只需要共享账单功能时，只运行 `apply-overlay.py`；三项补丁仍可独立应用。锚点缺失、歧义或补丁冲突会阻断构建；`.work/` 是本地测试数据，不会提交到补丁仓库。
 
-最近一次上游兼容性审查覆盖 v0.2.20–v0.2.23 及上游 `main`，包括按用户合并扣费和 Ultra Fast 前端测试的适配。v0.2.20 新增的管理 MCP 内部分发也应用共享账单限制，余额调整、订阅授予与续期不能通过 MCP 绕过限制。详见 [本次审查](docs/upstream-audit-2026-11-18.md) 和 [v0.2.15–v0.2.20 审查](docs/upstream-audit-2026-11-07.md)。
+### Codex 账户池额度恢复
+
+[上游 PR #9024](https://github.com/Wei-Shaw/sub2api/pull/9024) 的 5 个提交固定到 `06629eb94471889b2509c6e9b0470ece909a6a75`，完整差异和来源记录在 [`customizations/codex-pool-quota/`](customizations/codex-pool-quota/manifest.json)。CI 与 CD 使用仓库内同一份补丁和 SHA256 校验，无需等待上游合并，也不会自动跟踪远程分支后续提交。应用保留上游 Release HEAD，构建元数据另记 PR 来源、固定提交和补丁哈希。
+
+该功能默认关闭，管理员在 OpenAI 分组中启用后，HTTP 和 Responses WebSocket 可返回 `usage_limit_reached` 及账户池最早已知恢复时间 `resets_at`。迁移 `253_group_openai_codex_pool_quota_error.sql` 随程序分发，默认值为 `false`。两条工作流均设置 `CODEX_POOL_QUOTA_TEST_DSN`，让真实 PostgreSQL 迁移与持久化回归随 Go 测试执行，而非跳过。
+
+若未来上游已完整包含同一差异，应用脚本通过反向检查后跳过；部分合并或上游改动造成冲突时会失败，需要重新审查后更新或移除补丁。更新固定提交时必须同步差异、manifest、发布说明和 `PATCH_REVISION`，再通过完整验证。补丁修订号为 `12`，当前 v0.2.25 基线对应 `v0.2.25-share.12`，继续沿用既有定时及手动发布渠道。
+
+额度补丁与现有两项补丁已在 v0.2.25 组合验证，范围与本地限制见 [额度补丁接入记录](docs/codex-pool-quota-2026-11-25.md)。此前上游兼容性审查覆盖 v0.2.20–v0.2.23 及上游 `main`，包括按用户合并扣费和 Ultra Fast 前端测试的适配。v0.2.20 新增的管理 MCP 内部分发也应用共享账单限制，余额调整、订阅授予与续期不能通过 MCP 绕过限制。详见 [v0.2.20–v0.2.23 审查](docs/upstream-audit-2026-11-18.md) 和 [v0.2.15–v0.2.20 审查](docs/upstream-audit-2026-11-07.md)。
 
 ### Codex 使用教程配置
 
-Codex 教程定制与共享账单 overlay 分开放置、分别应用。OpenAI 分组的“使用密钥”教程只显示“Codex CLI (WebSocket)”入口，并默认启用该配置。教程模板位于 [`customizations/codex/frontend/src/sub2apiCodex/codexWebsocketConfig.ts`](customizations/codex/frontend/src/sub2apiCodex/codexWebsocketConfig.ts)，模型默认值和配置文本可直接编辑；模板启用 `api_key_model_discovery = true`，Codex 会从 API 端点获取最新模型列表，前端不再提供本地模型目录下载。CI 与发布流程会依次应用两层补丁。
+Codex 教程定制与共享账单 overlay 分开放置、分别应用。OpenAI 分组的“使用密钥”教程只显示“Codex CLI (WebSocket)”入口，并默认启用该配置。教程模板位于 [`customizations/codex/frontend/src/sub2apiCodex/codexWebsocketConfig.ts`](customizations/codex/frontend/src/sub2apiCodex/codexWebsocketConfig.ts)，模型默认值和配置文本可直接编辑；模板启用 `api_key_model_discovery = true`，Codex 会从 API 端点获取最新模型列表，前端不再提供本地模型目录下载。CI 与发布流程会先应用固定额度补丁，再依次应用 overlay 与教程定制。
 
 默认模型继续由模板统一配置，CC Switch 导入同步使用该值。v0.2.20 起保留上游 API Key 默认认证、图片扩展认证头和 CC Switch 的 JSON 配置载荷；WebSocket 教程包含实时联网搜索，并仅在 API Key 模式启用图片生成功能。手动选择 legacy 模式时仍生成 `auth.json`，不启用 API Key 图片功能。
 
@@ -98,7 +109,7 @@ GitHub 与 GHCR 的 latest 更新无法跨服务原子提交，因此两步之�
 
 ## 验证
 
-CI 与发布工作流会对上游源码应用补丁，生成 Wire 代码，运行 Go 单元测试、PostgreSQL 集成测试、前端类型检查与 Vitest，构建前端、Linux/amd64 更新包和容器镜像，并检查实际镜像的运行权限与资源。当前发布产物面向 Ubuntu/Linux x64。发布版本格式为 `v<上游版本>-share.<PATCH_REVISION>`；`release-metadata.json` 记录上游 tag、commit、补丁 commit、二进制 SHA256 和发布镜像 digest。
+CI 与发布工作流会对上游源码应用补丁，生成 Wire 代码，运行 Go 单元测试、PostgreSQL 集成测试、前端类型检查与 Vitest，构建前端、Linux/amd64 更新包和容器镜像，并检查实际镜像的运行权限与资源。当前发布产物面向 Ubuntu/Linux x64。发布版本格式为 `v<上游版本>-share.<PATCH_REVISION>`；`release-metadata.json` 记录上游 tag、commit、补丁 commit、Codex 额度补丁来源与哈希、二进制 SHA256 和发布镜像 digest。
 
 本地 PostgreSQL 生命周期测试通过 `SHAREPATCH_TEST_DATABASE_URL` 启用，例如：
 
