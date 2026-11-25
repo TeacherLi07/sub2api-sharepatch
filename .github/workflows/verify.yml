@@ -15,7 +15,7 @@ on:
     outputs:
       artifact-name:
         description: Release archive and Docker context verified in this run
-        value: ${{ jobs.package.outputs.artifact-name }}
+        value: ${{ jobs.complete.outputs.artifact-name }}
 
 permissions:
   contents: read
@@ -104,7 +104,7 @@ jobs:
           TEST_PARTITION: ${{ matrix.partition }}
         run: python3 scripts/run-go-tests.py --backend upstream/backend --tag "$TEST_TAG" --partition "$TEST_PARTITION"
 
-  frontend:
+  frontend-tests:
     needs: prepare
     runs-on: ubuntu-latest
     steps:
@@ -120,13 +120,36 @@ jobs:
           node-version: '20'
           cache: pnpm
           cache-dependency-path: upstream/frontend/pnpm-lock.yaml
-      - name: Install, typecheck, test, and build the frontend
+      - name: Install dependencies and run every frontend test
         working-directory: upstream/frontend
         run: |
           pnpm install --frozen-lockfile
-          pnpm run typecheck
           pnpm run test:run
-          pnpm run build
+
+  frontend-build:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: patched-upstream-${{ github.run_id }}
+      - run: tar -xf patched-upstream.tar
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: pnpm
+          cache-dependency-path: upstream/frontend/pnpm-lock.yaml
+      - name: Install frontend dependencies
+        working-directory: upstream/frontend
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck and run the complete upstream production build
+        run: python3 scripts/build-frontend.py --frontend upstream/frontend
       - name: Preserve the frontend embedded assets
         run: tar -cf frontend-dist.tar -C upstream/backend/internal/web dist
       - uses: actions/upload-artifact@v4
@@ -138,9 +161,9 @@ jobs:
           if-no-files-found: error
 
   package:
-    # Compile while Go tests are still running. The caller can publish only
-    # after this entire reusable workflow (including every test shard) succeeds.
-    needs: [prepare, frontend]
+    # Compile while Go and frontend tests are still running. The complete job
+    # exposes the artifact only after every independent verification succeeds.
+    needs: [prepare, frontend-build]
     runs-on: ubuntu-latest
     outputs:
       artifact-name: ${{ steps.artifact.outputs.name }}
@@ -200,3 +223,20 @@ jobs:
           retention-days: 7
           overwrite: true
           if-no-files-found: error
+
+  complete:
+    needs: [prepare, go-tests, frontend-tests, frontend-build, package]
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    outputs:
+      artifact-name: ${{ steps.checks.outputs.artifact-name }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Require every verification before handing artifacts to CD
+        id: checks
+        env:
+          CHECK_RESULTS: ${{ toJSON(needs) }}
+          VERIFIED_ARTIFACT: ${{ needs.package.outputs.artifact-name }}
+        run: python3 scripts/verify-ci-results.py

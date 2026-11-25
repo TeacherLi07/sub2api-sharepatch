@@ -43,7 +43,7 @@ go run -mod=mod github.com/google/wire/cmd/wire
 
 该功能默认关闭，管理员在 OpenAI 分组中启用后，HTTP 和 Responses WebSocket 可返回 `usage_limit_reached` 及账户池最早已知恢复时间 `resets_at`。迁移 `253_group_openai_codex_pool_quota_error.sql` 随程序分发，默认值为 `false`。两条工作流均设置 `CODEX_POOL_QUOTA_TEST_DSN`，让真实 PostgreSQL 迁移与持久化回归随 Go 测试执行，而非跳过。
 
-若未来上游已完整包含同一差异，应用脚本通过反向检查后跳过；部分合并或上游改动造成冲突时会失败，需要重新审查后更新或移除补丁。更新固定提交时必须同步差异、manifest、发布说明和 `PATCH_REVISION`，再通过完整验证。补丁修订号为 `13`，当前 v0.2.25 基线对应 `v0.2.25-share.13`，支持 push 自动正式发布、每日 04:23 UTC 跟随上游及手动发布。
+若未来上游已完整包含同一差异，应用脚本通过反向检查后跳过；部分合并或上游改动造成冲突时会失败，需要重新审查后更新或移除补丁。更新固定提交时必须同步差异、manifest、发布说明和 `PATCH_REVISION`，再通过完整验证。补丁修订号为 `14`，当前 v0.2.25 基线对应 `v0.2.25-share.14`，支持 push 自动正式发布、每日 04:23 UTC 跟随上游及手动发布。
 
 额度补丁与现有两项补丁已在 v0.2.25 组合验证，范围与本地限制见 [额度补丁接入记录](docs/codex-pool-quota-2026-11-25.md)。此前上游兼容性审查覆盖 v0.2.20–v0.2.23 及上游 `main`，包括按用户合并扣费和 Ultra Fast 前端测试的适配。v0.2.20 新增的管理 MCP 内部分发也应用共享账单限制，余额调整、订阅授予与续期不能通过 MCP 绕过限制。详见 [v0.2.20–v0.2.23 审查](docs/upstream-audit-2026-11-18.md) 和 [v0.2.15–v0.2.20 审查](docs/upstream-audit-2026-11-07.md)。
 
@@ -115,7 +115,9 @@ GitHub 与 GHCR 的 latest 更新无法跨服务原子提交，因此两步之�
 
 CI 与发布共用 `verify.yml`：对上游源码应用补丁后，将相同的临时检出分发给独立 runner，并行运行 Go 单元测试、PostgreSQL 集成测试及前端类型检查、Vitest 和生产构建。每种 Go build tag 各分成普通包组及三个 `internal/service` 分片，共 8 个 Go job，每个 job 使用独立 PostgreSQL。普通包组保留 `service` 的子包；大包按 `go test -list` 实际列出的顶层测试名称进行稳定哈希分片，子测试跟随父测试，Example 和 Fuzz 种子也完整保留。不改变上游业务包结构，不移除两种 tag 下的原有覆盖。
 
-前端构建完成后即可与 Go 测试并行编译 Linux/amd64 更新包、打包容器并检查实际镜像的运行权限与资源；全部 Go 分片、前端和镜像检查成功后，才允许发布已验证的产物。发布端重新校验产物的补丁提交、上游 SHA、版本、附件及二进制哈希，再打包并检查最终候选镜像。当前发布产物面向 Ubuntu/Linux x64。发布版本格式为 `v<上游版本>-share.<PATCH_REVISION>`；`release-metadata.json` 记录上游 tag、commit、补丁 commit、Codex 额度补丁来源与哈希、二进制 SHA256 和发布镜像 digest。
+前端完整 Vitest 测试与类型检查、生产构建分别在独立 job 并行执行。`scripts/build-frontend.py` 保留完整的上游 `pnpm run build`，包括 i18n 回归、`vue-tsc -b` 和 Vite 插件的检查；仅当 `typecheck` 与 `build` 两条命令均与已核实的组合完全一致时，省去重复的 `vue-tsc --noEmit`。上游修改任一命令时，自动恢复单独的 `pnpm run typecheck` 再执行构建，避免后续新增检查被漏掉。
+
+前端构建完成后即可与 Go、前端测试并行编译 Linux/amd64 更新包、打包容器并检查实际镜像的运行权限与资源。最终 `complete` job 必须收到源码准备、全部 Go 分片、前端完整测试、类型检查与构建、镜像打包检查五组成功结果，才向 CD 输出 artifact；任一失败、跳过或取消均不能通过。发布端重新校验产物的补丁提交、上游 SHA、版本、附件及二进制哈希，再打包并检查最终候选镜像。当前发布产物面向 Ubuntu/Linux x64。发布版本格式为 `v<上游版本>-share.<PATCH_REVISION>`；`release-metadata.json` 记录上游 tag、commit、补丁 commit、Codex 额度补丁来源与哈希、二进制 SHA256 和发布镜像 digest。
 
 本地 PostgreSQL 生命周期测试通过 `SHAREPATCH_TEST_DATABASE_URL` 启用，例如：
 
