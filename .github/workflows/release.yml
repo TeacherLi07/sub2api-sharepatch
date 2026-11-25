@@ -1,6 +1,20 @@
 name: Sharepatch release
 
 on:
+  workflow_call:
+    inputs:
+      upstream-sha:
+        required: true
+        type: string
+      upstream-tag:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      verified-artifact:
+        required: true
+        type: string
   schedule:
     - cron: '23 4 * * *'
   workflow_dispatch:
@@ -33,16 +47,40 @@ jobs:
       skip: ${{ steps.existing.outputs.skip }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Check patch anchor guards
         run: python3 -m unittest discover -s scripts/tests
-      - name: Resolve latest upstream formal release and fixed commit
-        id: upstream
+      - name: Resolve latest upstream formal release for scheduled and manual runs
+        if: inputs.verified-artifact == ''
+        id: baseline
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python3 scripts/resolve-upstream.py --github-output "$GITHUB_OUTPUT"
+      - name: Select the CI baseline or the newly resolved release
+        id: upstream
+        env:
+          SELECTED_SHA: ${{ inputs.upstream-sha || steps.baseline.outputs.upstream_sha }}
+          SELECTED_TAG: ${{ inputs.upstream-tag || steps.baseline.outputs.upstream_tag }}
+          SELECTED_VERSION: ${{ inputs.version || steps.baseline.outputs.release_version }}
+        run: |
+          python3 - <<'PYTHON' >> "$GITHUB_OUTPUT"
+          import os
+          import re
+          from pathlib import Path
+          sha, tag, version = (os.environ[key] for key in ("SELECTED_SHA", "SELECTED_TAG", "SELECTED_VERSION"))
+          if not re.fullmatch(r"[0-9a-f]{40}", sha) or not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
+              raise SystemExit("invalid upstream release baseline")
+          revision = int(Path("PATCH_REVISION").read_text().strip())
+          if revision <= 0 or version != f"{tag[1:]}-share.{revision}":
+              raise SystemExit("release version does not match the checked patch revision")
+          print(f"upstream_sha={sha}")
+          print(f"upstream_tag={tag}")
+          print(f"release_version={version}")
+          PYTHON
       - name: Choose isolated pre-release version for manual builds
         id: publication
         env:
@@ -69,103 +107,53 @@ jobs:
           UPSTREAM_SHA: ${{ steps.upstream.outputs.upstream_sha }}
         run: python3 scripts/publish-release.py preflight
 
-  build-test-publish:
+  verify:
     needs: resolve
-    if: needs.resolve.outputs.skip == 'false'
+    if: needs.resolve.outputs.skip == 'false' && inputs.verified-artifact == ''
+    uses: ./.github/workflows/verify.yml
+    with:
+      upstream-sha: ${{ needs.resolve.outputs.sha }}
+      upstream-tag: ${{ needs.resolve.outputs.tag }}
+      version: ${{ needs.resolve.outputs.version }}
+
+  build-test-publish:
+    needs: [resolve, verify]
+    if: >-
+      always() && !cancelled() && needs.resolve.result == 'success' &&
+      needs.resolve.outputs.skip == 'false' &&
+      (needs.verify.result == 'success' ||
+       (needs.verify.result == 'skipped' && inputs.verified-artifact != ''))
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: sharepatch
-          POSTGRES_PASSWORD: sharepatch
-          POSTGRES_DB: sharepatch_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U sharepatch -d sharepatch_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
     env:
-      NO_PROXY: 127.0.0.1,localhost,::1
-      SHAREPATCH_REPO: ${{ github.repository }}
-      SHAREPATCH_TEST_DATABASE_URL: postgres://sharepatch:sharepatch@127.0.0.1:5432/sharepatch_test?sslmode=disable
-      CODEX_POOL_QUOTA_TEST_DSN: host=127.0.0.1 port=5432 user=sharepatch password=sharepatch dbname=sharepatch_test sslmode=disable
       SHAREPATCH_VERSION: v${{ needs.resolve.outputs.version }}
       SHAREPATCH_PRERELEASE: ${{ needs.resolve.outputs.prerelease }}
       UPSTREAM_SHA: ${{ needs.resolve.outputs.sha }}
       UPSTREAM_TAG: ${{ needs.resolve.outputs.tag }}
     steps:
       - uses: actions/checkout@v6
-
-      - uses: actions/checkout@v6
         with:
-          repository: Wei-Shaw/sub2api
-          ref: ${{ needs.resolve.outputs.sha }}
-          path: upstream
-
+          persist-credentials: false
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-
-      - uses: actions/setup-go@v6
+      - name: Download the assets from the successful verification jobs
+        uses: actions/download-artifact@v4
         with:
-          go-version-file: upstream/backend/go.mod
-          cache: true
-          cache-dependency-path: upstream/backend/go.sum
-
-      - uses: pnpm/action-setup@v6
-        with:
-          version: 9
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '20'
-          cache: pnpm
-          cache-dependency-path: upstream/frontend/pnpm-lock.yaml
-
-      - name: Apply pinned Codex quota fix, sharepatch, and tutorial to the upstream commit
+          name: ${{ inputs.verified-artifact || needs.verify.outputs.artifact-name }}
+      - name: Restore and validate the source, version, and binary checksums
         run: |
-          python3 scripts/apply-codex-pool-quota.py \
-            --upstream upstream \
-            --upstream-sha "$UPSTREAM_SHA"
-          python3 scripts/apply-overlay.py \
-            --upstream upstream \
-            --upstream-sha "$UPSTREAM_SHA" \
-            --patch-repo "$GITHUB_REPOSITORY"
-          python3 scripts/apply-codex-customizations.py \
-            --upstream upstream \
-            --upstream-sha "$UPSTREAM_SHA"
-          cd upstream/backend/cmd/server
-          go run -mod=mod github.com/google/wire/cmd/wire
-
-      - name: Install and verify frontend
-        working-directory: upstream/frontend
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm run typecheck
-          pnpm run test:run
-          pnpm run build
-
-      - name: Run Go unit tests
-        working-directory: upstream/backend
-        run: go test -tags=unit ./...
-
-      - name: Run PostgreSQL and container integration tests
-        working-directory: upstream/backend
-        run: go test -tags=integration ./...
-
-      - name: Build linux/amd64 release archive and checksums
-        run: |
-          python3 scripts/build-release-assets.py \
-            --upstream upstream \
-            --version "$SHAREPATCH_VERSION" \
-            --upstream-tag "$UPSTREAM_TAG" \
-            --upstream-sha "$UPSTREAM_SHA" \
-            --patch-repo "$GITHUB_REPOSITORY" \
-            --output release-assets \
-            --docker-context release-image
+          tar -xf verified-release.tar
+          PYTHONPATH=scripts python3 - <<'PYTHON'
+          import os
+          from pathlib import Path
+          from release_assets import sha256, verify_directory
+          metadata = verify_directory(
+              Path("release-assets"), os.environ["SHAREPATCH_VERSION"],
+              os.environ["GITHUB_REPOSITORY"], os.environ["UPSTREAM_SHA"], os.environ["GITHUB_SHA"],
+          )
+          if sha256(Path("release-image/sub2api")) != metadata["binary_sha256"]:
+              raise SystemExit("Docker context binary differs from the verified release archive")
+          PYTHON
 
       - uses: docker/setup-buildx-action@v3
 
@@ -191,8 +179,8 @@ jobs:
             org.opencontainers.image.version=${{ env.SHAREPATCH_VERSION }}
             org.opencontainers.image.revision=${{ github.sha }}
             io.sub2api.sharepatch.upstream-revision=${{ env.UPSTREAM_SHA }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=sharepatch-runtime
+          cache-to: type=gha,scope=sharepatch-runtime,mode=max
 
       - name: Check image binary, runtime user, updater permissions, resources, and backup tools
         env:
@@ -264,6 +252,8 @@ jobs:
       UPSTREAM_SHA: ${{ needs.resolve.outputs.sha }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'

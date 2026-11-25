@@ -2,6 +2,7 @@ name: Overlay CI
 
 on:
   push:
+    branches: ['**']
   pull_request:
   workflow_dispatch:
 
@@ -9,121 +10,41 @@ permissions:
   contents: read
 
 jobs:
-  verify:
+  baseline:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: sharepatch
-          POSTGRES_PASSWORD: sharepatch
-          POSTGRES_DB: sharepatch_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U sharepatch -d sharepatch_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
-    env:
-      NO_PROXY: 127.0.0.1,localhost,::1
-      SHAREPATCH_REPO: ${{ github.repository }}
-      SHAREPATCH_TEST_DATABASE_URL: postgres://sharepatch:sharepatch@127.0.0.1:5432/sharepatch_test?sslmode=disable
-      CODEX_POOL_QUOTA_TEST_DSN: host=127.0.0.1 port=5432 user=sharepatch password=sharepatch dbname=sharepatch_test sslmode=disable
+    outputs:
+      sha: ${{ steps.upstream.outputs.upstream_sha }}
+      tag: ${{ steps.upstream.outputs.upstream_tag }}
+      version: ${{ steps.upstream.outputs.release_version }}
     steps:
       - uses: actions/checkout@v6
-
-      - name: Check patch anchor guards
+        with:
+          persist-credentials: false
+      - name: Check patch guards and test partitioning
         run: python3 -m unittest discover -s scripts/tests
-
-      - name: Resolve latest upstream formal release
-        id: baseline
+      - name: Resolve the upstream release once for CI and publication
+        id: upstream
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          python3 scripts/resolve-upstream.py --github-output "$GITHUB_OUTPUT"
+        run: python3 scripts/resolve-upstream.py --github-output "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v6
-        with:
-          repository: Wei-Shaw/sub2api
-          ref: ${{ steps.baseline.outputs.upstream_sha }}
-          path: upstream
+  verify:
+    needs: baseline
+    uses: ./.github/workflows/verify.yml
+    with:
+      upstream-sha: ${{ needs.baseline.outputs.sha }}
+      upstream-tag: ${{ needs.baseline.outputs.tag }}
+      version: ${{ needs.baseline.outputs.version }}
 
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: upstream/backend/go.mod
-          cache: true
-          cache-dependency-path: upstream/backend/go.sum
-
-      - uses: pnpm/action-setup@v6
-        with:
-          version: 9
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '20'
-          cache: pnpm
-          cache-dependency-path: upstream/frontend/pnpm-lock.yaml
-
-      - name: Apply pinned Codex quota fix, sharepatch, tutorial, and regenerate Wire
-        run: |
-          python3 scripts/apply-codex-pool-quota.py \
-            --upstream upstream \
-            --upstream-sha "${{ steps.baseline.outputs.upstream_sha }}"
-          python3 scripts/apply-overlay.py \
-            --upstream upstream \
-            --upstream-sha "${{ steps.baseline.outputs.upstream_sha }}" \
-            --patch-repo "${{ github.repository }}"
-          python3 scripts/apply-codex-customizations.py \
-            --upstream upstream \
-            --upstream-sha "${{ steps.baseline.outputs.upstream_sha }}"
-          cd upstream/backend/cmd/server
-          go run -mod=mod github.com/google/wire/cmd/wire
-
-      - name: Go unit tests
-        working-directory: upstream/backend
-        run: go test -tags=unit ./...
-
-      - name: PostgreSQL and container integration tests
-        working-directory: upstream/backend
-        run: go test -tags=integration ./...
-
-      - name: Install frontend dependencies
-        working-directory: upstream/frontend
-        run: pnpm install --frozen-lockfile
-
-      - name: Frontend typecheck, tests, and production build
-        working-directory: upstream/frontend
-        run: |
-          pnpm run typecheck
-          pnpm run test:run
-          pnpm run build
-
-      - name: Build and validate the release archive and runtime Docker context
-        env:
-          UPSTREAM_SHA: ${{ steps.baseline.outputs.upstream_sha }}
-          UPSTREAM_TAG: ${{ steps.baseline.outputs.upstream_tag }}
-          SHAREPATCH_VERSION: v${{ steps.baseline.outputs.release_version }}
-        run: |
-          python3 scripts/build-release-assets.py \
-            --upstream upstream --version "$SHAREPATCH_VERSION" \
-            --upstream-tag "$UPSTREAM_TAG" --upstream-sha "$UPSTREAM_SHA" \
-            --patch-repo "$GITHUB_REPOSITORY" --output release-assets \
-            --docker-context release-image
-
-      - uses: docker/setup-buildx-action@v3
-      - name: Package the verified binary as a Linux/amd64 image
-        uses: docker/build-push-action@v6
-        with:
-          context: release-image
-          file: release-image/Dockerfile
-          platforms: linux/amd64
-          load: true
-          provenance: false
-          tags: sharepatch-ci:${{ github.run_id }}
-      - name: Check the actual image runtime and update permissions
-        env:
-          CI_IMAGE: sharepatch-ci:${{ github.run_id }}
-          UPSTREAM_SHA: ${{ steps.baseline.outputs.upstream_sha }}
-          SHAREPATCH_VERSION: v${{ steps.baseline.outputs.release_version }}
-        run: bash scripts/verify-release-image.sh "$CI_IMAGE" release-image "$SHAREPATCH_VERSION" "$UPSTREAM_SHA"
+  release:
+    needs: [baseline, verify]
+    if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    permissions:
+      contents: write
+      packages: write
+    uses: ./.github/workflows/release.yml
+    with:
+      upstream-sha: ${{ needs.baseline.outputs.sha }}
+      upstream-tag: ${{ needs.baseline.outputs.tag }}
+      version: ${{ needs.baseline.outputs.version }}
+      verified-artifact: ${{ needs.verify.outputs.artifact-name }}

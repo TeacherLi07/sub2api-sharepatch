@@ -1,6 +1,6 @@
 # sub2api-sharepatch
 
-此仓库为 Sub2API 上游正式版维护共享账单、Codex 教程定制及待上游合并的 Codex 额度恢复补丁。PR CI、定时和手动发布都会解析上游最新正式 Release 的 tag 与 commit SHA，并在一次运行中固定使用该 SHA 完成检出、补丁应用、测试和构建。
+此仓库为 Sub2API 上游正式版维护共享账单、Codex 教程定制及待上游合并的 Codex 额度恢复补丁。Push、PR CI、定时和手动发布都会解析上游最新正式 Release 的 tag 与 commit SHA，并在一次运行中固定使用该 SHA 完成检出、补丁应用、测试和构建。默认分支 `master` 的 push 在 CI 全部通过后自动正式发布，直接复用本次验证的更新包和 Docker 构建目录；其它分支、PR 及手动 CI 只验证，不发布。
 
 CI 与发布使用该固定提交的 `backend/go.mod` 指定的 Go 版本；源码 Docker 构建保留上游的 Go 镜像版本，避免上游升级工具链后旧版本补丁阻断发布。
 
@@ -43,7 +43,7 @@ go run -mod=mod github.com/google/wire/cmd/wire
 
 该功能默认关闭，管理员在 OpenAI 分组中启用后，HTTP 和 Responses WebSocket 可返回 `usage_limit_reached` 及账户池最早已知恢复时间 `resets_at`。迁移 `253_group_openai_codex_pool_quota_error.sql` 随程序分发，默认值为 `false`。两条工作流均设置 `CODEX_POOL_QUOTA_TEST_DSN`，让真实 PostgreSQL 迁移与持久化回归随 Go 测试执行，而非跳过。
 
-若未来上游已完整包含同一差异，应用脚本通过反向检查后跳过；部分合并或上游改动造成冲突时会失败，需要重新审查后更新或移除补丁。更新固定提交时必须同步差异、manifest、发布说明和 `PATCH_REVISION`，再通过完整验证。补丁修订号为 `12`，当前 v0.2.25 基线对应 `v0.2.25-share.12`，继续沿用既有定时及手动发布渠道。
+若未来上游已完整包含同一差异，应用脚本通过反向检查后跳过；部分合并或上游改动造成冲突时会失败，需要重新审查后更新或移除补丁。更新固定提交时必须同步差异、manifest、发布说明和 `PATCH_REVISION`，再通过完整验证。补丁修订号为 `13`，当前 v0.2.25 基线对应 `v0.2.25-share.13`，支持 push 自动正式发布、每日 04:23 UTC 跟随上游及手动发布。
 
 额度补丁与现有两项补丁已在 v0.2.25 组合验证，范围与本地限制见 [额度补丁接入记录](docs/codex-pool-quota-2026-11-25.md)。此前上游兼容性审查覆盖 v0.2.20–v0.2.23 及上游 `main`，包括按用户合并扣费和 Ultra Fast 前端测试的适配。v0.2.20 新增的管理 MCP 内部分发也应用共享账单限制，余额调整、订阅授予与续期不能通过 MCP 绕过限制。详见 [v0.2.20–v0.2.23 审查](docs/upstream-audit-2026-11-18.md) 和 [v0.2.15–v0.2.20 审查](docs/upstream-audit-2026-11-07.md)。
 
@@ -99,6 +99,10 @@ docker compose exec -u 0 sub2api chown sub2api:sub2api /app
 
 发布范围固定为 `linux/amd64`。Release tag 和镜像版本标签保持 `v<上游版本>-share.<补丁修订>`；更新包文件名使用不带 `v` 的版本号，例如 `sub2api_0.2.11-share.4_linux_amd64.tar.gz`。旧版网页更新按平台匹配附件，仍可识别新文件名；历史 Release 附件保持原样。
 
+`ci.yml` 在默认分支 push 的验证成功后调用 `release.yml`，传递本次固定的上游 tag、SHA、版本及 artifact 名称，不会再次解析上游或重跑测试、编译。`release.yml` 保留每日定时及手动入口；这两种入口先检查已有 Release，确需构建时调用同一个 `verify.yml` 并行验证流程。手动发布默认选择隔离预发布，选择 `release` 才正式发布。所有正式发布共用串行发布锁，全部测试与实际镜像检查成功后才上传 Release、推进 latest。
+
+发布 tag 与补丁 commit 一一对应。同一上游版本有新的补丁提交要正式发布时，必须递增 `PATCH_REVISION`；自动发布不会覆盖指向另一提交的已有 tag，重跑相同提交可按既有完整性检查复用发布。验证产物保留 7 天，通过 tar 传递以保留可执行权限；过期后需要重新运行完整 CI。
+
 前端和后端在工作流中各构建一次。`scripts/build-release-assets.py` 校验版本与上游 SHA，生成更新包、元数据和 SHA256 清单，再从已校验的更新包提取二进制生成最小 Docker 构建目录。镜像使用上游 `Dockerfile.goreleaser` 打包这份程序，并包含入口脚本、定价资源与 PostgreSQL 备份工具。发布前通过实际容器检查程序版本、二进制和定价文件哈希、运行用户、更新目录创建与文件重命名权限，以及 `pg_dump`、`psql` 可执行性。
 
 镜像检查通过后先推送独立的 `build-<run_id>-<attempt>` 候选标签，把镜像 digest 写入 `release-metadata.json` 并重算校验清单。随后创建或恢复草稿 Release，上传完整附件并重新校验，生成版本镜像标签，再发布 Release。正式发布最后按元数据中记录的 digest 推进镜像 `latest`，成功后才推进网页更新的 latest Release。预发布使用独立的 `-preview.<run_id>.<attempt>` 版本，不推进 latest。
@@ -109,7 +113,9 @@ GitHub 与 GHCR 的 latest 更新无法跨服务原子提交，因此两步之�
 
 ## 验证
 
-CI 与发布工作流会对上游源码应用补丁，生成 Wire 代码，运行 Go 单元测试、PostgreSQL 集成测试、前端类型检查与 Vitest，构建前端、Linux/amd64 更新包和容器镜像，并检查实际镜像的运行权限与资源。当前发布产物面向 Ubuntu/Linux x64。发布版本格式为 `v<上游版本>-share.<PATCH_REVISION>`；`release-metadata.json` 记录上游 tag、commit、补丁 commit、Codex 额度补丁来源与哈希、二进制 SHA256 和发布镜像 digest。
+CI 与发布共用 `verify.yml`：对上游源码应用补丁后，将相同的临时检出分发给独立 runner，并行运行 Go 单元测试、PostgreSQL 集成测试及前端类型检查、Vitest 和生产构建。每种 Go build tag 各分成普通包组及三个 `internal/service` 分片，共 8 个 Go job，每个 job 使用独立 PostgreSQL。普通包组保留 `service` 的子包；大包按 `go test -list` 实际列出的顶层测试名称进行稳定哈希分片，子测试跟随父测试，Example 和 Fuzz 种子也完整保留。不改变上游业务包结构，不移除两种 tag 下的原有覆盖。
+
+前端构建完成后即可与 Go 测试并行编译 Linux/amd64 更新包、打包容器并检查实际镜像的运行权限与资源；全部 Go 分片、前端和镜像检查成功后，才允许发布已验证的产物。发布端重新校验产物的补丁提交、上游 SHA、版本、附件及二进制哈希，再打包并检查最终候选镜像。当前发布产物面向 Ubuntu/Linux x64。发布版本格式为 `v<上游版本>-share.<PATCH_REVISION>`；`release-metadata.json` 记录上游 tag、commit、补丁 commit、Codex 额度补丁来源与哈希、二进制 SHA256 和发布镜像 digest。
 
 本地 PostgreSQL 生命周期测试通过 `SHAREPATCH_TEST_DATABASE_URL` 启用，例如：
 

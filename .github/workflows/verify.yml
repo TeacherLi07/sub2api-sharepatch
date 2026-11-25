@@ -1,0 +1,202 @@
+name: Verify and build sharepatch
+
+on:
+  workflow_call:
+    inputs:
+      upstream-sha:
+        required: true
+        type: string
+      upstream-tag:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+    outputs:
+      artifact-name:
+        description: Release archive and Docker context verified in this run
+        value: ${{ jobs.package.outputs.artifact-name }}
+
+permissions:
+  contents: read
+
+env:
+  UPSTREAM_SHA: ${{ inputs.upstream-sha }}
+  UPSTREAM_TAG: ${{ inputs.upstream-tag }}
+  SHAREPATCH_VERSION: v${{ inputs.version }}
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          repository: Wei-Shaw/sub2api
+          ref: ${{ inputs.upstream-sha }}
+          path: upstream
+          persist-credentials: false
+      - name: Apply all patches to the fixed upstream commit
+        run: |
+          python3 scripts/apply-codex-pool-quota.py --upstream upstream --upstream-sha "$UPSTREAM_SHA"
+          python3 scripts/apply-overlay.py --upstream upstream --upstream-sha "$UPSTREAM_SHA" --patch-repo "$GITHUB_REPOSITORY"
+          python3 scripts/apply-codex-customizations.py --upstream upstream --upstream-sha "$UPSTREAM_SHA"
+      - name: Preserve the patched source and Git HEAD for every job
+        run: tar -cf patched-upstream.tar upstream
+      - uses: actions/upload-artifact@v4
+        with:
+          name: patched-upstream-${{ github.run_id }}
+          path: patched-upstream.tar
+          compression-level: 1
+          retention-days: 7
+          overwrite: true
+          if-no-files-found: error
+
+  go-tests:
+    needs: prepare
+    name: Go ${{ matrix.tag }} / ${{ matrix.partition }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: [unit, integration]
+        partition: [packages, service-0, service-1, service-2]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: sharepatch
+          POSTGRES_PASSWORD: sharepatch
+          POSTGRES_DB: sharepatch_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sharepatch -d sharepatch_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      NO_PROXY: 127.0.0.1,localhost,::1
+      SHAREPATCH_REPO: ${{ github.repository }}
+      SHAREPATCH_TEST_DATABASE_URL: postgres://sharepatch:sharepatch@127.0.0.1:5432/sharepatch_test?sslmode=disable
+      CODEX_POOL_QUOTA_TEST_DSN: host=127.0.0.1 port=5432 user=sharepatch password=sharepatch dbname=sharepatch_test sslmode=disable
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: patched-upstream-${{ github.run_id }}
+      - run: tar -xf patched-upstream.tar
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: upstream/backend/go.mod
+          cache: true
+          cache-dependency-path: upstream/backend/go.sum
+      - name: Regenerate Wire
+        working-directory: upstream/backend/cmd/server
+        run: go run -mod=mod github.com/google/wire/cmd/wire
+      - name: Run the selected Go package group or service shard
+        env:
+          TEST_TAG: ${{ matrix.tag }}
+          TEST_PARTITION: ${{ matrix.partition }}
+        run: python3 scripts/run-go-tests.py --backend upstream/backend --tag "$TEST_TAG" --partition "$TEST_PARTITION"
+
+  frontend:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: patched-upstream-${{ github.run_id }}
+      - run: tar -xf patched-upstream.tar
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: pnpm
+          cache-dependency-path: upstream/frontend/pnpm-lock.yaml
+      - name: Install, typecheck, test, and build the frontend
+        working-directory: upstream/frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run typecheck
+          pnpm run test:run
+          pnpm run build
+      - name: Preserve the frontend embedded assets
+        run: tar -cf frontend-dist.tar -C upstream/backend/internal/web dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist-${{ github.run_id }}
+          path: frontend-dist.tar
+          retention-days: 7
+          overwrite: true
+          if-no-files-found: error
+
+  package:
+    # Compile while Go tests are still running. The caller can publish only
+    # after this entire reusable workflow (including every test shard) succeeds.
+    needs: [prepare, frontend]
+    runs-on: ubuntu-latest
+    outputs:
+      artifact-name: ${{ steps.artifact.outputs.name }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: patched-upstream-${{ github.run_id }}
+      - run: tar -xf patched-upstream.tar
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist-${{ github.run_id }}
+      - run: tar -xf frontend-dist.tar -C upstream/backend/internal/web
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: upstream/backend/go.mod
+          cache: true
+          cache-dependency-path: upstream/backend/go.sum
+      - name: Regenerate Wire
+        working-directory: upstream/backend/cmd/server
+        run: go run -mod=mod github.com/google/wire/cmd/wire
+      - name: Build the release archive and runtime Docker context once
+        run: |
+          python3 scripts/build-release-assets.py \
+            --upstream upstream --version "$SHAREPATCH_VERSION" \
+            --upstream-tag "$UPSTREAM_TAG" --upstream-sha "$UPSTREAM_SHA" \
+            --patch-repo "$GITHUB_REPOSITORY" --output release-assets \
+            --docker-context release-image
+      - uses: docker/setup-buildx-action@v3
+      - name: Package the binary as a Linux/amd64 image
+        uses: docker/build-push-action@v6
+        with:
+          context: release-image
+          file: release-image/Dockerfile
+          platforms: linux/amd64
+          load: true
+          provenance: false
+          tags: sharepatch-ci:${{ github.run_id }}
+          cache-from: type=gha,scope=sharepatch-runtime
+          cache-to: type=gha,scope=sharepatch-runtime,mode=max
+      - name: Verify the actual image runtime and update permissions
+        env:
+          CI_IMAGE: sharepatch-ci:${{ github.run_id }}
+        run: bash scripts/verify-release-image.sh "$CI_IMAGE" release-image "$SHAREPATCH_VERSION" "$UPSTREAM_SHA"
+      - name: Bundle verified assets with executable permissions intact
+        id: artifact
+        run: |
+          tar -cf verified-release.tar release-assets release-image
+          echo "name=verified-release-${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: verified-release.tar
+          compression-level: 1
+          retention-days: 7
+          overwrite: true
+          if-no-files-found: error

@@ -11,7 +11,7 @@ This repository carries independently applied changes for Sub2API: the shared-bi
 - `scripts/apply-overlay.py`: applies the shared-billing overlay to an upstream checkout.
 - `scripts/apply-codex-customizations.py`: applies the Codex customization separately.
 - `scripts/resolve-upstream.py`: resolves the latest official upstream release to its immutable commit SHA.
-- `.github/workflows/`: CI and release workflows. `PATCH_REVISION` contributes to the published version.
+- `.github/workflows/`: CI and release entrypoints and the shared parallel `verify.yml` pipeline. Default-branch pushes publish the verified CI artifacts; scheduled and manual releases use the same verification pipeline. `PATCH_REVISION` contributes to the published version.
 
 The generated application lives in the upstream checkout, not in this repository. Keep new patch-owned source files under `overlay/` or `customizations/`, and put necessary upstream edits in the corresponding apply script using unique, checked anchors.
 
@@ -35,4 +35,4 @@ Keep this customization independent of the shared-billing overlay. The template 
 
 ## Validation
 
-Follow the user's request about whether to run verification. When verification is requested, use `.github/workflows/ci.yml` as the source of truth: apply all three patches to the pinned upstream checkout, regenerate Wire, run Go unit and integration tests, then frontend typecheck, tests, and production build. PostgreSQL tests use `SHAREPATCH_TEST_DATABASE_URL` and the keyword-format `CODEX_POOL_QUOTA_TEST_DSN`; `README.md` includes a local example. Do not treat a partial local check as equivalent to the full CI workflow.
+Follow the user's request about whether to run verification. When verification is requested, use `.github/workflows/ci.yml` and its reusable `verify.yml` as the source of truth: apply all three patches to the pinned upstream checkout, regenerate Wire, run both Go unit and integration tags across every package group/service shard, and run frontend typecheck, tests, and production build. `scripts/run-go-tests.py` partitions tests without moving upstream source packages. PostgreSQL tests use `SHAREPATCH_TEST_DATABASE_URL` and the keyword-format `CODEX_POOL_QUOTA_TEST_DSN`; `README.md` includes a local example. Do not treat a partial local check as equivalent to the full CI workflow.
